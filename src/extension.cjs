@@ -419,6 +419,10 @@ async function activate(context) {
     extensionRoot: context.extensionPath,
     getConfiguration: (entry) =>
       vscode.workspace.getConfiguration('tinymist', vscode.Uri.file(entry)),
+    getWorkingDirectory: () => {
+      const first = vscode.workspace.workspaceFolders?.[0]?.uri;
+      return first?.scheme === 'file' ? first.fsPath : process.cwd();
+    },
     restartEditor: async () => {
       const tiny = vscode.extensions.getExtension(TINYMIST_ID);
       if (!tiny) throw Error('Tinymist 依赖尚未安装，请完成扩展安装后重试。');

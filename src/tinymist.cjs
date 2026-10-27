@@ -45,9 +45,9 @@ function expandPath(value, { root, entry, env = process.env, home = os.homedir()
 }
 
 function normalizeSettings(configuration, context) {
-  // The editor server inherits the extension host cwd; our compiler uses the
-  // notebook root, so relative resource paths must be made absolute first.
-  const cwd = context.cwd || process.cwd();
+  // vscode-languageclient starts Tinymist in the first workspace folder.
+  // Resolve resource paths there before passing them to a notebook session.
+  const cwd = context.cwd || context.root;
   const get = (name, fallback) =>
     configuration.get?.(name, fallback) ?? configuration[name] ?? fallback;
   const raw = get('typstExtraArgs', []);
@@ -86,11 +86,14 @@ function normalizeSettings(configuration, context) {
   if (!Array.isArray(fonts) || fonts.some((p) => typeof p !== 'string'))
     throw Error('tinymist.fontPaths 必须是路径数组。');
   const configuredPath = get('serverPath', null);
+  const env = context.env || process.env;
   return {
     configuredPath: configuredPath ? expandPath(configuredPath, context) : undefined,
     fontPaths: fonts.map((p) => path.resolve(cwd, expandPath(p, context))),
     extraArgs,
-    packagePath: explicitPackages || packageRoot({ env: context.env || process.env }),
+    packagePath:
+      explicitPackages ||
+      (env.TYPST_PACKAGE_PATH ? path.resolve(cwd, env.TYPST_PACKAGE_PATH) : packageRoot({ env })),
   };
 }
 
@@ -152,8 +155,20 @@ function validateServer(info, capabilities) {
 }
 
 class TemplateBridge {
-  constructor({ extensionRoot, getConfiguration, restartEditor, onLog = () => {} }) {
-    Object.assign(this, { extensionRoot, getConfiguration, restartEditor, onLog });
+  constructor({
+    extensionRoot,
+    getConfiguration,
+    getWorkingDirectory,
+    restartEditor,
+    onLog = () => {},
+  }) {
+    Object.assign(this, {
+      extensionRoot,
+      getConfiguration,
+      getWorkingDirectory,
+      restartEditor,
+      onLog,
+    });
     this.installed = new Map();
     this.pending = new Map();
     this.restarts = 0;
@@ -161,7 +176,11 @@ class TemplateBridge {
     this.restartTail = Promise.resolve();
   }
   async ensure(entry, root, { force = false } = {}) {
-    const settings = normalizeSettings(this.getConfiguration(entry), { root, entry });
+    const settings = normalizeSettings(this.getConfiguration(entry), {
+      root,
+      entry,
+      cwd: this.getWorkingDirectory?.(),
+    });
     const key = settings.packagePath;
     if (!force && this.installed.has(key))
       return { ...settings, ...this.installed.get(key), changed: false, restarted: false };

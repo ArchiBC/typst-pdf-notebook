@@ -37,11 +37,12 @@ async function workspace(t) {
 
 test('Tinymist settings retain layout options, expand paths and isolate notebook entry/output', () => {
   const root = path.resolve('sample workspace'),
-    entry = path.join(root, 'notes.typ');
+    entry = path.join(root, 'notes.typ'),
+    cwd = path.resolve('editor workspace');
   const result = normalizeSettings(
     {
       serverPath: '${workspaceFolder}/bin/tinymist',
-      fontPaths: ['${env:NOTE_FONTS}', '${fileDirname}/fonts'],
+      fontPaths: ['${env:NOTE_FONTS}', '${fileDirname}/fonts', 'relative-fonts'],
       typstExtraArgs: [
         'old-main.typ',
         '--root',
@@ -55,18 +56,27 @@ test('Tinymist settings retain layout options, expand paths and isolate notebook
         '--no-pdf-tags',
       ],
     },
-    { root, entry, cwd: root, env: { NOTE_FONTS: path.join(root, 'global-fonts') } },
+    { root, entry, cwd, env: { NOTE_FONTS: path.join(root, 'global-fonts') } },
   );
   assert.equal(path.resolve(result.configuredPath), path.join(root, 'bin/tinymist'));
-  assert.deepEqual(result.fontPaths, [path.join(root, 'global-fonts'), path.join(root, 'fonts')]);
+  assert.deepEqual(result.fontPaths, [
+    path.join(root, 'global-fonts'),
+    path.join(root, 'fonts'),
+    path.join(cwd, 'relative-fonts'),
+  ]);
   assert.deepEqual(result.extraArgs, [
     '--input',
     'lang=zh',
     '--font-path',
-    path.resolve(root, '/shared fonts'),
+    path.resolve(cwd, '/shared fonts'),
     '--no-pdf-tags',
   ]);
-  assert.equal(result.packagePath, path.join(root, 'local-packages'));
+  assert.equal(result.packagePath, path.join(cwd, 'local-packages'));
+  assert.equal(
+    normalizeSettings({}, { root, entry, cwd, env: { TYPST_PACKAGE_PATH: 'env-packages' } })
+      .packagePath,
+    path.join(cwd, 'env-packages'),
+  );
   assert.throws(
     () => normalizeSettings({ typstExtraArgs: ['--package-path'] }, { root, entry }),
     /缺少值/,

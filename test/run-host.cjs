@@ -4,10 +4,9 @@ const os = require('node:os');
 const { runTests } = require('@vscode/test-electron');
 const { createHostFixture } = require('./support/book.cjs');
 const { environment } = require('./support/environment.cjs');
-async function main() {
+async function runCase(prepared, startup) {
   const project = path.resolve(__dirname, '..'),
     output = path.join(project, 'output');
-  const prepared = environment();
   if (!prepared.code) throw Error('请先运行 npm run test:prepare。');
   await fs.mkdir(output, { recursive: true });
   const root = await fs.mkdtemp(path.join(output, 'host-workspace-'));
@@ -20,7 +19,9 @@ async function main() {
     JSON.stringify({
       'tinymist.exportPdf': 'never',
       'tinymist.fontPaths': prepared.fontPaths,
-      'tinymist.typstExtraArgs': ['main.typ'],
+      'tinymist.typstExtraArgs': startup
+        ? ['main.typ', '--input', 'notebook-ci=startup', '--package-path', 'relative-packages']
+        : ['main.typ'],
       'tinymist.rootPath': root,
       'tinymist.configureDefaultWordSeparator': 'disable',
     }),
@@ -29,10 +30,16 @@ async function main() {
     await runTests({
       vscodeExecutablePath: prepared.code,
       extensionDevelopmentPath: process.env.NOTEBOOK_EXTENSION_PATH || prepared.extensionPath,
-      extensionTestsPath: path.join(__dirname, 'extension-host.cjs'),
+      extensionTestsPath: path.join(
+        __dirname,
+        startup ? 'tinymist-host.cjs' : 'extension-host.cjs',
+      ),
       extensionTestsEnv: {
         NOTEBOOK_TEST_ROOT: root,
-        NOTEBOOK_EVIDENCE: path.join(output, 'extension-host-evidence.json'),
+        NOTEBOOK_EVIDENCE: path.join(
+          output,
+          startup ? 'tinymist-host-evidence.json' : 'extension-host-evidence.json',
+        ),
         NOTEBOOK_STRESS_HOST: process.env.NOTEBOOK_STRESS_HOST || '',
         TYPST_PACKAGE_PATH: path.join(root, '.typst-packages'),
         NOTEBOOK_TEST_FONT_PATHS: JSON.stringify(prepared.fontPaths),
@@ -65,6 +72,11 @@ async function main() {
       throw Error('Invalid test profile cleanup target');
     await fs.rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
+}
+async function main() {
+  const prepared = environment();
+  await runCase(prepared, false);
+  await runCase(prepared, true);
 }
 main().catch((error) => {
   console.error(error);

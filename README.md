@@ -125,6 +125,8 @@ Chengsi 配置放在同一个笔记文件的 `notebook.with(config: (...))` 中�
 
 引擎跟随 `tinymist.serverPath`，未配置时依次使用 Tinymist 扩展内置程序和 PATH；同时继承 `tinymist.fontPaths` 及 `typstExtraArgs` 中的字体、输入变量、包目录等排版选项。笔记会话使用自身的入口和完整页输出，避免被编辑器固定的主文件或导出页范围改变。修改这些设置会重建笔记编译会话，保留当前未保存正文和最后一次成功预览。
 
+相对字体和包路径按 Tinymist 编辑器服务的工作目录解析，即第一个工作区文件夹。Tinymist 0.15.10 的 `restartServer` 命令仍保留启动时的 `typstExtraArgs`；修改该设置后，整本预览会自动更新，编辑器语言服务需要重新加载 VS Code 窗口才能采用新参数。
+
 内置模板先安装到 Tinymist 实际使用的本地包目录，再启动笔记编译。首次安装产生新文件时，插件会重启编辑器中的 Tinymist，刷新其缺失包缓存；模板没有变化时不会重复重启。该流程不生成笔记目录中的配置文件，也不修改用户的 Tinymist 设置。当前要求 Tinymist 0.15.10 或更新版本，并在初始化时检查导出和定位接口。
 
 打开整本预览时，插件自动识别当前笔记；编辑 include 的正文时，复用最近使用的笔记入口。无需配置 `pdfNotebook.entry`。下面的工作区设置是可选的，其中 `entry` 仅作为备用入口：
@@ -157,6 +159,8 @@ code --install-extension .\output\typst-pdf-notebook-0.3.2.vsix --force
 按 F5 可启动扩展开发宿主。`test:prepare` 下载指定版本的 VS Code，在空扩展目录安装本项目 VSIX，验证 Tinymist 自动依赖安装，并准备固定版本的测试字体。`NOTEBOOK_VSCODE_VERSION` 可指定 VS Code 版本；本地可用 `NOTEBOOK_CODE_BIN` 指定已有程序，或用 `NOTEBOOK_FONT_PATHS`（JSON 路径数组）使用本机字体。
 
 `test/run-host.cjs` 自动生成 341 页测试 PDF 和笔记工作区，覆盖仅有 PDF 时的命令激活、同目录单文件笔记、未保存编辑、分页、双向定位和错误恢复。还会给真实编辑器 Tinymist 使用一个空包目录，验证缺失包缓存的恢复及未保存正文保留。证据写到 `output/extension-host-evidence.json`，测试不依赖个人书籍或全局扩展目录。
+
+另起一个干净宿主，验证启动时相对包目录、输入参数在编辑器 Tinymist 和笔记编译器中一致，结果写到 `output/tinymist-host-evidence.json`。
 
 GitHub Actions 在每次 push / pull request 时打包一次，由 Windows、macOS、Linux 三个平台安装同一个 VSIX，并运行原生排版测试和真实 VS Code 宿主测试；Linux 宿主使用 Xvfb。失败日志和测试证据会保存为工作流附件。工作流仅构建和验证。
 

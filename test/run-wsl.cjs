@@ -104,7 +104,7 @@ tail -4 output/host.log
         '--',
         'bash',
         '-c',
-        `cd ${quote(root)}; tar -cf - --ignore-failed-read output/test-env.json output/prepare.log output/native.log output/host.log output/extension-host-evidence.json`,
+        `cd ${quote(root)}; tar -cf - --ignore-failed-read output/test-env.json output/prepare.log output/native.log output/host.log output/extension-host-evidence.json output/tinymist-host-evidence.json`,
       ],
       { stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true },
     );

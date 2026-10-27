@@ -5,7 +5,7 @@ const vscode = require('vscode'),
 async function wait(fn, label) {
   const end = Date.now() + 25000;
   while (Date.now() < end) {
-    if (fn()) return;
+    if (await fn()) return;
     await new Promise((r) => setTimeout(r, 60));
   }
   throw Error('Timeout: ' + label);
@@ -18,6 +18,19 @@ async function replace(doc, text) {
     text,
   );
   assert.equal(await vscode.workspace.applyEdit(edit), true);
+}
+async function editorMetadata() {
+  const exported = await vscode.commands.executeCommand(
+    'tinymist.export',
+    'Query',
+    { selector: 'metadata', field: 'value', format: 'json' },
+    { write: false },
+  );
+  try {
+    return JSON.parse(exported.data);
+  } catch {
+    return JSON.parse(Buffer.from(exported.data, 'base64').toString());
+  }
 }
 async function run() {
   const root = process.env.NOTEBOOK_TEST_ROOT;
@@ -101,18 +114,7 @@ async function run() {
     const repaired = await api.ensureTemplate(coldDoc.uri, { force: true });
     assert.equal(repaired.restarted, true);
     assert.equal(api.integration.restarts, beforeRestart + 1);
-    const exported = await vscode.commands.executeCommand(
-      'tinymist.export',
-      'Query',
-      { selector: 'metadata', field: 'value', format: 'json' },
-      { write: false },
-    );
-    let values;
-    try {
-      values = JSON.parse(exported.data);
-    } catch {
-      values = JSON.parse(Buffer.from(exported.data, 'base64').toString());
-    }
+    const values = await editorMetadata();
     assert.ok(values.some((m) => m.kind === 'cold-unsaved' && m.value === 'KEEP'));
     await api.ensureTemplate(coldDoc.uri, { force: true });
     assert.equal(
@@ -200,7 +202,7 @@ async function run() {
       '--input',
       'notebook-ci=linked',
       '--package-path',
-      path.relative(process.cwd(), relativePackages),
+      path.relative(root, relativePackages),
     ],
     vscode.ConfigurationTarget.Workspace,
   );
@@ -218,7 +220,7 @@ async function run() {
   );
   assert.equal(session.engine.source, 'tinymist.serverPath');
   assert.equal(session.engine.binary, customBinary);
-  assert.equal(session.compiler.packagePath, relativePackages);
+  assert.equal(path.relative(relativePackages, session.compiler.packagePath), '');
   assert.equal(fs.readFileSync(path.join(root, 'main.typ'), 'utf8'), originalMain);
   evidence.tinymistConfiguration = {
     customBinary: true,

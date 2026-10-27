@@ -59,6 +59,7 @@ jobs:
           path: |
             output/test-env.json
             output/extension-host-evidence.json
+            output/tinymist-host-evidence.json
             output/host-workspace-*/.profile-logs
             output/test-cache/install-*/installation.log
           if-no-files-found: warn
