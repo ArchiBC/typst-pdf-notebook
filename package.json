@@ -2,19 +2,37 @@
   "name": "typst-pdf-notebook",
   "displayName": "Typst PDF Notebook",
   "description": "原书按需阅读、Typst 笔记双向定位，导出时插页。",
-  "version": "0.3.2",
-  "publisher": "archi",
+  "version": "0.3.3",
+  "publisher": "ArcBC",
+  "icon": "media/icon.png",
+  "homepage": "https://github.com/ArchiBC/typst-pdf-notebook#readme",
+  "bugs": {
+    "url": "https://github.com/ArchiBC/typst-pdf-notebook/issues"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/ArchiBC/typst-pdf-notebook.git"
   },
   "license": "MIT",
   "engines": {
-    "vscode": "^1.100.0"
+    "vscode": "^1.143.1"
   },
   "categories": [
-    "Other"
+    "Notebooks",
+    "Education"
   ],
+  "keywords": [
+    "typst",
+    "pdf",
+    "notebook",
+    "notes",
+    "math",
+    "reading"
+  ],
+  "galleryBanner": {
+    "color": "#163d42",
+    "theme": "dark"
+  },
   "main": "./dist/extension.cjs",
   "extensionDependencies": [
     "myriad-dreamin.tinymist"
@@ -127,7 +145,7 @@
     "test:prepare": "node test/prepare.cjs",
     "test:stress": "node test/stress.cjs",
     "export": "node scripts/export.cjs",
-    "package": "vsce package --no-dependencies --allow-missing-repository --out output/typst-pdf-notebook-0.3.2.vsix",
+    "package": "vsce package --no-dependencies --out output/typst-pdf-notebook-0.3.3.vsix",
     "vscode:prepublish": "npm run build"
   },
   "dependencies": {

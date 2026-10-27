@@ -34,7 +34,8 @@ async function editorMetadata() {
 }
 async function run() {
   const root = process.env.NOTEBOOK_TEST_ROOT;
-  const extension = vscode.extensions.getExtension('archi.typst-pdf-notebook');
+  const manifest = require('../package.json');
+  const extension = vscode.extensions.getExtension(`${manifest.publisher}.${manifest.name}`);
   assert.ok(extension);
   assert.ok(extension.packageJSON.extensionDependencies.includes('myriad-dreamin.tinymist'));
   assert.ok(vscode.extensions.getExtension('myriad-dreamin.tinymist'));

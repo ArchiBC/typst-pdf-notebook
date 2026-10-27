@@ -10,3 +10,4 @@ output/**
 .github/**
 .gitattributes
 .prettierrc.json
+media/icon.svg

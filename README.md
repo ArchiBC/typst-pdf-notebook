@@ -2,12 +2,20 @@
 
 VS Code 插件：Typst 排版笔记，插件负责整本 PDF 阅读、虚拟插页和最终导出。运行和构建均不需要 Python。
 
+Read a PDF alongside native Typst notes. Keep the original text selectable, jump between note source and preview, and export one PDF with notes inserted after the relevant pages.
+
+![整本 PDF 与 Chengsi 数学笔记预览](media/preview.png)
+
 ## 使用
 
-1. 安装 `output/typst-pdf-notebook-0.3.2.vsix`，VS Code 会通过扩展依赖自动安装 Tinymist。
+要求 VS Code 1.143.1 或更新版本。Windows、macOS、Linux 均有安装与运行测试。
+
+1. 在扩展市场搜索 **Typst PDF Notebook**（发布者 **ArcBC**），或从 [GitHub Actions](https://github.com/ArchiBC/typst-pdf-notebook/actions) 下载 VSIX 后执行 **Extensions: Install from VSIX**。VS Code 会自动安装依赖 Tinymist（要求 0.15.10 或更新版本）。
 2. 在 VS Code 资源管理器中，右键 PDF → **新建 Typst 笔记**。右键文件夹也有此入口：其中只有一本 PDF 时直接使用，否则弹出选择框。
 3. 插件只在 PDF 旁边创建 `原书名.notes.typ`，自动填写原书路径和第一页尺寸。不生成 `template.typ` 或 `.vscode/settings.json`。同名笔记已存在时打开原文件，保留未保存的编辑。`.notes` 后缀也让普通 Typst 导出得到独立的笔记 PDF 文件名。
 4. 执行 **PDF Notebook: 打开整本笔记预览**，或点击 Typst 编辑器右上角的书本按钮。
+
+若之前安装过发布者为 `archi` 的本地开发版，请先卸载旧版扩展，再安装 `ArcBC` 版，避免两份扩展注册同名命令。笔记文件和本地 Typst 模板包可继续使用。
 
 ```typst
 #import "@local/typst-pdf-notebook:0.3.1": *
@@ -153,7 +161,7 @@ npm run package
 npm run test:prepare
 npm test
 npm run test:host
-code --install-extension .\output\typst-pdf-notebook-0.3.2.vsix --force
+code --install-extension .\output\typst-pdf-notebook-0.3.3.vsix --force
 ```
 
 按 F5 可启动扩展开发宿主。`test:prepare` 下载指定版本的 VS Code，在空扩展目录安装本项目 VSIX，验证 Tinymist 自动依赖安装，并准备固定版本的测试字体。`NOTEBOOK_VSCODE_VERSION` 可指定 VS Code 版本；本地可用 `NOTEBOOK_CODE_BIN` 指定已有程序，或用 `NOTEBOOK_FONT_PATHS`（JSON 路径数组）使用本机字体。

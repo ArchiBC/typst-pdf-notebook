@@ -18,7 +18,8 @@ async function run() {
     '\n#metadata((kind: "startup-config", value: sys.inputs.at("notebook-ci", default: "missing")))\n',
   );
   assert.equal(await vscode.workspace.applyEdit(edit), true);
-  const extension = vscode.extensions.getExtension('archi.typst-pdf-notebook');
+  const manifest = require('../package.json');
+  const extension = vscode.extensions.getExtension(`${manifest.publisher}.${manifest.name}`);
   const api = await extension.activate();
   const session = await api.getSession();
   assert.equal(
