@@ -423,7 +423,21 @@ async function activate(context) {
       const tiny = vscode.extensions.getExtension(TINYMIST_ID);
       if (!tiny) throw Error('Tinymist 依赖尚未安装，请完成扩展安装后重试。');
       await tiny.activate();
-      await vscode.commands.executeCommand('tinymist.restartServer');
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await vscode.commands.executeCommand('tinymist.restartServer');
+          break;
+        } catch (error) {
+          if (
+            attempt >= 3 ||
+            !/not found|stopped|disposed|initializ|restart|starting|not running|connection/i.test(
+              error.message,
+            )
+          )
+            throw error;
+          await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
+        }
+      }
     },
     onLog: (text) => output.appendLine(text),
   });

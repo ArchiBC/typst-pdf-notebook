@@ -192,9 +192,16 @@ async function run() {
   const oldServerPath = tinyConfig.inspect('serverPath').workspaceValue;
   const oldExtraArgs = tinyConfig.inspect('typstExtraArgs').workspaceValue;
   await tinyConfig.update('serverPath', customBinary, vscode.ConfigurationTarget.Workspace);
+  const relativePackages = path.join(root, 'relative-packages');
   await tinyConfig.update(
     'typstExtraArgs',
-    ['main.typ', '--input', 'notebook-ci=linked'],
+    [
+      'main.typ',
+      '--input',
+      'notebook-ci=linked',
+      '--package-path',
+      path.relative(process.cwd(), relativePackages),
+    ],
     vscode.ConfigurationTarget.Workspace,
   );
   await replace(
@@ -211,12 +218,14 @@ async function run() {
   );
   assert.equal(session.engine.source, 'tinymist.serverPath');
   assert.equal(session.engine.binary, customBinary);
+  assert.equal(session.compiler.packagePath, relativePackages);
   assert.equal(fs.readFileSync(path.join(root, 'main.typ'), 'utf8'), originalMain);
   evidence.tinymistConfiguration = {
     customBinary: true,
     fontPaths: true,
     inputs: true,
     unsavedDuringRestart: true,
+    relativePackagePath: true,
   };
   await tinyConfig.update('serverPath', oldServerPath, vscode.ConfigurationTarget.Workspace);
   await tinyConfig.update('typstExtraArgs', oldExtraArgs, vscode.ConfigurationTarget.Workspace);

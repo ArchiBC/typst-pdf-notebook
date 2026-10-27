@@ -50,6 +50,15 @@ async function prepare() {
   const install = reuse ? path.join(cache, reuse) : await fs.mkdtemp(path.join(cache, 'install-'));
   const extensions = path.join(install, 'extensions'),
     profile = path.join(install, 'profile');
+  if (process.env.NOTEBOOK_TEST_PROXY) {
+    await fs.mkdir(path.join(profile, 'User'), { recursive: true });
+    await fs.writeFile(
+      path.join(profile, 'User/settings.json'),
+      JSON.stringify({
+        'http.proxy': process.env.NOTEBOOK_TEST_PROXY,
+      }),
+    );
+  }
   const cliArgs = [
     '--user-data-dir',
     profile,

@@ -55,7 +55,7 @@ test('Tinymist settings retain layout options, expand paths and isolate notebook
         '--no-pdf-tags',
       ],
     },
-    { root, entry, env: { NOTE_FONTS: path.join(root, 'global-fonts') } },
+    { root, entry, cwd: root, env: { NOTE_FONTS: path.join(root, 'global-fonts') } },
   );
   assert.equal(path.resolve(result.configuredPath), path.join(root, 'bin/tinymist'));
   assert.deepEqual(result.fontPaths, [path.join(root, 'global-fonts'), path.join(root, 'fonts')]);
@@ -63,7 +63,7 @@ test('Tinymist settings retain layout options, expand paths and isolate notebook
     '--input',
     'lang=zh',
     '--font-path',
-    '/shared fonts',
+    path.resolve(root, '/shared fonts'),
     '--no-pdf-tags',
   ]);
   assert.equal(result.packagePath, path.join(root, 'local-packages'));
@@ -89,7 +89,7 @@ test('engine discovery honors serverPath and never silently falls back from an i
   assert.equal(calls.length, 2);
   calls.length = 0;
   await assert.rejects(
-    () => resolveEngine({ extensionPath: root, root, configuredPath: './custom/tiny', probe }),
+    () => resolveEngine({ extensionPath: root, cwd: root, configuredPath: './custom/tiny', probe }),
     /serverPath/,
   );
   assert.deepEqual(calls, [path.join(root, 'custom/tiny')]);

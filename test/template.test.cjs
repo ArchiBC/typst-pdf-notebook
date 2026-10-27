@@ -2,12 +2,25 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const {
   packageRoot,
   installTemplate,
   PACKAGE_IMPORT,
   templateUpgradeEdits,
 } = require('../src/template.cjs');
+
+test('vendored Chengsi files retain their upstream byte hashes on every platform', async () => {
+  const root = path.resolve(__dirname, '../templates/chengsi');
+  const upstream = JSON.parse(await fs.readFile(path.join(root, 'UPSTREAM.json'), 'utf8'));
+  for (const file of upstream.files) {
+    const hash = crypto
+      .createHash('sha256')
+      .update(await fs.readFile(path.join(root, file.path)))
+      .digest('hex');
+    assert.equal(hash, file.sha256, file.path);
+  }
+});
 
 test('template package uses Typst standard data paths and honors TYPST_PACKAGE_PATH', () => {
   assert.equal(

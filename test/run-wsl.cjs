@@ -69,6 +69,7 @@ async function main() {
   const command = `set -euo pipefail
 export PATH="$HOME/.cache/typst-note/runtime/node-v24.22.1-linux-x64/bin:$PATH"
 export NOTEBOOK_TEST_CACHE="$HOME/.cache/typst-note/test-cache"
+export NOTEBOOK_TEST_PROXY="\${HTTPS_PROXY:-\${https_proxy:-}}"
 cd ${quote(root)}
 ${localFonts ? 'export NOTEBOOK_FONT_PATHS=' + quote(JSON.stringify([root + '/test-fonts'])) : ''}
 npm ci > output/npm-ci.log 2>&1 || { cat output/npm-ci.log; exit 1; }

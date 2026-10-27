@@ -45,6 +45,9 @@ function expandPath(value, { root, entry, env = process.env, home = os.homedir()
 }
 
 function normalizeSettings(configuration, context) {
+  // The editor server inherits the extension host cwd; our compiler uses the
+  // notebook root, so relative resource paths must be made absolute first.
+  const cwd = context.cwd || process.cwd();
   const get = (name, fallback) =>
     configuration.get?.(name, fallback) ?? configuration[name] ?? fallback;
   const raw = get('typstExtraArgs', []);
@@ -65,8 +68,19 @@ function normalizeSettings(configuration, context) {
       throw Error(`笔记会话暂不支持 Tinymist 参数 ${flag}。`);
     const value = eq < 0 ? raw[++i] : arg.slice(eq + 1);
     if (!value || value.startsWith('--')) throw Error(`Tinymist 参数 ${flag} 缺少值。`);
-    if (flag === '--package-path') explicitPackages = path.resolve(context.root, value);
-    else if (!ownedOptions.has(flag)) extraArgs.push(flag, value);
+    if (flag === '--package-path') explicitPackages = path.resolve(cwd, value);
+    else if (!ownedOptions.has(flag)) {
+      const resolved =
+        flag === '--font-path'
+          ? value
+              .split(path.delimiter)
+              .map((p) => path.resolve(cwd, p))
+              .join(path.delimiter)
+          : ['--package-cache-path', '--cert'].includes(flag)
+            ? path.resolve(cwd, value)
+            : value;
+      extraArgs.push(flag, resolved);
+    }
   }
   const fonts = get('fontPaths', []) || [];
   if (!Array.isArray(fonts) || fonts.some((p) => typeof p !== 'string'))
@@ -74,7 +88,7 @@ function normalizeSettings(configuration, context) {
   const configuredPath = get('serverPath', null);
   return {
     configuredPath: configuredPath ? expandPath(configuredPath, context) : undefined,
-    fontPaths: fonts.map((p) => path.resolve(context.root, expandPath(p, context))),
+    fontPaths: fonts.map((p) => path.resolve(cwd, expandPath(p, context))),
     extraArgs,
     packagePath: explicitPackages || packageRoot({ env: context.env || process.env }),
   };
@@ -83,7 +97,7 @@ function normalizeSettings(configuration, context) {
 async function resolveEngine({
   extensionPath,
   configuredPath,
-  root,
+  cwd = process.cwd(),
   platform = process.platform,
   probe,
 }) {
@@ -91,7 +105,7 @@ async function resolveEngine({
     probe ||
     (async (binary) => {
       await promisify(execFile)(binary, ['probe'], {
-        cwd: root,
+        cwd,
         windowsHide: true,
         timeout: 10000,
         maxBuffer: 65536,
@@ -103,7 +117,7 @@ async function resolveEngine({
         {
           binary:
             configuredPath.includes('/') || configuredPath.includes('\\')
-              ? path.resolve(root, configuredPath)
+              ? path.resolve(cwd, configuredPath)
               : configuredPath,
           source: 'tinymist.serverPath',
         },
