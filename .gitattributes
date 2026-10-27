@@ -1,0 +1,7 @@
+* text=auto
+*.cjs text eol=lf
+*.sh text eol=lf
+*.yml text eol=lf
+# Preserve the exact bytes of immutable packages and upstream provenance hashes.
+templates/** -text
+LICENSE -text

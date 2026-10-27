@@ -1,0 +1,8 @@
+[package]
+name = "typst-pdf-notebook"
+version = "0.3.0"
+entrypoint = "notebook.typ"
+authors = ["Archi"]
+license = "MIT AND MIT-0"
+description = "Chengsi mathematics notes for the Typst PDF Notebook VS Code extension"
+compiler = "0.15.0"

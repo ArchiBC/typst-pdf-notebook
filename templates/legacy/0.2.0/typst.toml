@@ -1,0 +1,7 @@
+[package]
+name = "typst-pdf-notebook"
+version = "0.2.0"
+entrypoint = "notebook.typ"
+authors = ["Archi"]
+license = "MIT"
+description = "Notes for the Typst PDF Notebook VS Code extension"

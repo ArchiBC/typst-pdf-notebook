@@ -1,0 +1,145 @@
+{
+  "name": "typst-pdf-notebook",
+  "displayName": "Typst PDF Notebook",
+  "description": "原书按需阅读、Typst 笔记双向定位，导出时插页。",
+  "version": "0.3.2",
+  "publisher": "archi",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ArchiBC/typst-pdf-notebook.git"
+  },
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.cjs",
+  "extensionDependencies": [
+    "myriad-dreamin.tinymist"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onLanguage:typst",
+    "onCommand:pdfNotebook.newNote",
+    "onCommand:pdfNotebook.useChengsi",
+    "onCommand:pdfNotebook.initialize",
+    "onCommand:pdfNotebook.open",
+    "onCommand:pdfNotebook.export",
+    "onCommand:pdfNotebook.forwardSearch"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    },
+    "virtualWorkspaces": false
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "pdfNotebook.useChengsi",
+        "title": "切换到 Chengsi 模板",
+        "category": "PDF Notebook"
+      },
+      {
+        "command": "pdfNotebook.newNote",
+        "title": "新建 Typst 笔记",
+        "category": "PDF Notebook",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "pdfNotebook.initialize",
+        "title": "初始化笔记",
+        "category": "PDF Notebook"
+      },
+      {
+        "command": "pdfNotebook.open",
+        "title": "打开整本笔记预览",
+        "category": "PDF Notebook",
+        "icon": "$(book)"
+      },
+      {
+        "command": "pdfNotebook.export",
+        "title": "导出插页 PDF",
+        "category": "PDF Notebook",
+        "icon": "$(export)"
+      },
+      {
+        "command": "pdfNotebook.forwardSearch",
+        "title": "定位当前笔记到预览",
+        "category": "PDF Notebook"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "pdfNotebook.useChengsi",
+          "when": "resourceScheme == file && resourceExtname == .typ",
+          "group": "navigation@6"
+        },
+        {
+          "command": "pdfNotebook.newNote",
+          "when": "resourceScheme == file",
+          "group": "navigation@5"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "pdfNotebook.open",
+          "when": "editorLangId == typst",
+          "group": "navigation@1"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "pdfNotebook.forwardSearch",
+        "key": "ctrl+alt+j",
+        "mac": "cmd+alt+j",
+        "when": "editorLangId == typst && editorTextFocus"
+      }
+    ],
+    "configuration": {
+      "title": "Typst PDF Notebook",
+      "properties": {
+        "pdfNotebook.entry": {
+          "type": "string",
+          "default": "main.typ",
+          "scope": "resource",
+          "description": "找不到当前或最近使用的笔记时，使用此入口，相对于当前工作区。"
+        },
+        "pdfNotebook.followCursor": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "移动笔记源码光标时，将整本预览定位到相应段落。"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.cjs",
+    "test": "node --test test/*.test.cjs",
+    "test:host": "node test/run-host.cjs",
+    "test:prepare": "node test/prepare.cjs",
+    "test:stress": "node test/stress.cjs",
+    "export": "node scripts/export.cjs",
+    "package": "vsce package --no-dependencies --allow-missing-repository --out output/typst-pdf-notebook-0.3.2.vsix",
+    "vscode:prepublish": "npm run build"
+  },
+  "dependencies": {
+    "pdf-lib": "1.17.1",
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "@vscode/test-electron": "3.1.0",
+    "@vscode/vsce": "4.0.0",
+    "esbuild": "^0.25.12",
+    "pdfjs-dist": "6.4.299",
+    "playwright-core": "^1.62.1",
+    "prettier": "^3.9.10"
+  }
+}

@@ -1,0 +1,65 @@
+name: Notebook compatibility
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run package
+      - uses: actions/upload-artifact@v7
+        with:
+          name: notebook-vsix
+          path: output/*.vsix
+          if-no-files-found: error
+  compatibility:
+    needs: package
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v8
+        with:
+          name: notebook-vsix
+          path: output
+      - name: Install the packaged extension and its Tinymist dependency
+        run: npm run test:prepare
+      - name: Native layout, package bootstrap and source mapping
+        run: npm test
+      - name: VS Code integration (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run test:host
+      - name: VS Code integration (Windows / macOS)
+        if: runner.os != 'Linux'
+        run: npm run test:host
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: evidence-${{ matrix.os }}
+          path: |
+            output/test-env.json
+            output/extension-host-evidence.json
+            output/host-workspace-*/.profile/logs
+            output/test-cache/install-*/installation.log
+          if-no-files-found: warn
+          include-hidden-files: true

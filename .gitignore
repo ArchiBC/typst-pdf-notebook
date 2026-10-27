@@ -1,0 +1,8 @@
+node_modules/
+dist/
+vendor/
+*.vsix
+output/
+.test-workspace/
+.vscode-test/
+test-fonts/

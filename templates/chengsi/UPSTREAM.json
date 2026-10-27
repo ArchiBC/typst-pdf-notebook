@@ -1,0 +1,42 @@
+{
+  "name": "chengsi",
+  "version": "0.1.2",
+  "repository": "https://github.com/zhaozigu/typst-chengsi-template",
+  "source": "https://raw.githubusercontent.com/typst/packages/main/packages/preview/chengsi/0.1.2",
+  "license": "MIT-0",
+  "modified": false,
+  "files": [
+    {
+      "path": "lib.typ",
+      "sha256": "f77226fff67792fa94caf2c3ddbfedef6aab55bcbf0521bea1055e4d0ce6ef52"
+    },
+    {
+      "path": "template.typ",
+      "sha256": "fe664baaee223db9b1e2be70e16a96c5ae1de52d78f4c389ea6d6e4ba08fe24f"
+    },
+    {
+      "path": "themes.typ",
+      "sha256": "4284936a9f6bf1446e5ea84420afa858d72bea6bb5d85cd73c14b21584d02618"
+    },
+    {
+      "path": "LICENSE",
+      "sha256": "633adbfab8247310b596299b8736f1b050b90b2621b3c3c1f989f7ee8a72b871"
+    },
+    {
+      "path": "typst.toml",
+      "sha256": "7094d5bd0d6e0d368f6e8062d2bf3af44f553301a11e9bbb2a2cd9f68a6498d8"
+    },
+    {
+      "path": "styles/quiet.tmTheme",
+      "sha256": "68c3a57f1e9ba68b5a8f1812e1aaf08ee84febe580ebd4c251390f7739dc3aa9"
+    },
+    {
+      "path": "styles/indigo.tmTheme",
+      "sha256": "e8f7ee524425514e91af4eb8005b33f6e128b9c64418453bc1d6626ca49dee7f"
+    },
+    {
+      "path": "styles/sepia.tmTheme",
+      "sha256": "d5452eb21c2e42525261fabd1079b8cb3829ffdba06755a2f1890aebb777dbff"
+    }
+  ]
+}

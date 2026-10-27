@@ -1,0 +1,12 @@
+src/**
+scripts/**
+test/**
+node_modules/**
+package-lock.json
+**/*.map
+.gitignore
+output/**
+.vscode/**
+.github/**
+.gitattributes
+.prettierrc.json

@@ -1,0 +1,6 @@
+The mathematical typography and environment styles in this template are adapted
+through Chengsi 0.1.2 by Eric Zhao (Eric), licensed under MIT-0.
+Upstream source is vendored without modifications in chengsi/.
+Source: https://github.com/typst/packages/tree/main/packages/preview/chengsi/0.1.2
+License: chengsi/LICENSE
+Provenance and SHA-256 checksums: chengsi/UPSTREAM.json

@@ -1,0 +1,239 @@
+:root {
+  color-scheme: light dark;
+  --ink: var(--vscode-foreground, #273b40);
+  --background: var(--vscode-editor-background, #fafbfb);
+  --border: var(--vscode-panel-border, #d7e0e1);
+  --accent: #377d80;
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  font:
+    13px system-ui,
+    sans-serif;
+  color: var(--ink);
+  background: var(--background);
+}
+body {
+  display: flex;
+  flex-direction: column;
+}
+header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 46px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+}
+header strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 550;
+  max-width: 36%;
+}
+.spacer {
+  flex: 1;
+}
+button,
+select,
+input {
+  font: inherit;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--background);
+  color: var(--ink);
+  padding: 5px 8px;
+}
+button {
+  cursor: pointer;
+}
+button:hover {
+  background: var(--vscode-toolbar-hoverBackground, #e4eeee);
+}
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent);
+}
+#export {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+  white-space: nowrap;
+}
+#page {
+  width: 57px;
+  text-align: center;
+  padding-right: 0;
+}
+.page-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+aside {
+  width: 230px;
+  flex: none;
+  border-right: 1px solid var(--border);
+  overflow: auto;
+  padding: 14px 9px;
+  background: var(--background);
+}
+aside.hidden {
+  display: none;
+}
+aside h2 {
+  font-size: 13px;
+  margin: 2px 6px 12px;
+  font-weight: 600;
+}
+#filter {
+  width: 100%;
+  margin-bottom: 10px;
+}
+#outline button {
+  display: block;
+  border: 0;
+  border-radius: 3px;
+  text-align: left;
+  width: 100%;
+  font-size: 12px;
+  line-height: 1.55;
+  padding-block: 5px;
+}
+#outline button.note {
+  color: var(--accent);
+  font-weight: 600;
+}
+#viewer {
+  position: relative;
+  overflow: auto;
+  flex: 1;
+  min-width: 0;
+  background: var(--vscode-sideBar-background, #e9eeee);
+  scrollbar-gutter: stable;
+}
+#pages {
+  padding: 20px 20px 34px;
+  min-width: 100%;
+  width: max-content;
+  margin: auto;
+}
+.sheet {
+  position: relative;
+  margin: 0 auto 22px;
+  contain: layout style;
+}
+.caption {
+  height: 23px;
+  font-size: 11px;
+  line-height: 23px;
+  opacity: 0.7;
+  padding-left: 2px;
+}
+.paper {
+  position: relative;
+  isolation: isolate;
+  background: white;
+  box-shadow: 0 1px 5px #0003;
+  overflow: hidden;
+  color: black;
+}
+.paper canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.paper .textLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  overflow: clip;
+  opacity: 1;
+}
+.paper .textLayer ::selection {
+  background: #4696f45c;
+}
+.link-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+.link-layer a {
+  position: absolute;
+  pointer-events: auto;
+}
+.link-layer a:hover {
+  background: #2092dd22;
+}
+.note .caption {
+  color: var(--accent);
+  opacity: 1;
+}
+.note .paper {
+  outline: 1px solid #61a5a744;
+}
+#empty {
+  padding: 80px 30px;
+  text-align: center;
+  opacity: 0.7;
+}
+footer {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+}
+footer.error {
+  color: var(--vscode-errorForeground, #c12d42);
+}
+@media (max-width: 760px) {
+  aside {
+    width: 180px;
+  }
+  header strong {
+    display: none;
+  }
+  header {
+    gap: 4px;
+    padding-inline: 6px;
+  }
+  footer > span:last-child {
+    display: none;
+  }
+}
+@media (max-width: 480px) {
+  aside {
+    position: absolute;
+    top: 46px;
+    bottom: 28px;
+    left: 0;
+    z-index: 8;
+    box-shadow: 3px 0 7px #0002;
+  }
+  #pages {
+    padding: 12px 8px 25px;
+  }
+  #zoom {
+    max-width: 91px;
+  }
+}
