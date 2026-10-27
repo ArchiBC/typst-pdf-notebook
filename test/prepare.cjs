@@ -19,12 +19,14 @@ async function runCli(code, args, env = {}) {
     executable = code;
     env = { ...env, ELECTRON_RUN_AS_NODE: '1', VSCODE_DEV: '' };
   }
-  return promisify(execFile)(executable, args, {
-    env: { ...process.env, ...env },
+  const running = promisify(execFile)(executable, args, {
+    env: { ...process.env, DONT_PROMPT_WSL_INSTALL: '1', ...env },
     windowsHide: true,
     timeout: 240000,
     maxBuffer: 4 * 1024 * 1024,
   });
+  running.child?.stdin?.end();
+  return running;
 }
 async function prepare() {
   const manifest = require('../package.json');

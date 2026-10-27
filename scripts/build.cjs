@@ -3,6 +3,7 @@ const path = require('node:path');
 const esbuild = require('esbuild');
 async function build() {
   const root = path.resolve(__dirname, '..');
+  fs.mkdirSync(path.join(root, 'output'), { recursive: true });
   await esbuild.build({
     entryPoints: [path.join(root, 'src/extension.cjs')],
     outfile: path.join(root, 'dist/extension.cjs'),
