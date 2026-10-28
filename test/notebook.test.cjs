@@ -103,6 +103,26 @@ const wait = async (predicate) => {
 };
 async function compile(f) {
   const result = await f.compiler.compile({ book: f.book });
+  const current =
+    f.compiler.opened.get(require('node:url').pathToFileURL(f.entry).href)?.text || '';
+  if (
+    current.includes(PACKAGE_IMPORT) &&
+    result.metadata.find((x) => x.kind === 'pdf-notebook')?.sideLayout !== 1
+  ) {
+    const repeated = await f.compiler.compile({ book: f.book });
+    assert.fail(
+      'Native snapshot did not match current source: ' +
+        JSON.stringify({
+          first: result.metadata,
+          widths: (result.notes || (await PDFDocument.load(result.bytes)))
+            .getPages()
+            .map((p) => p.getWidth()),
+          repeated: repeated.metadata,
+          source: current.slice(0, 500),
+          log: f.compiler.log.slice(-2400),
+        }),
+    );
+  }
   const notes = result.notes || (await PDFDocument.load(result.bytes));
   return { ...result, notes, plan: result.plan || planNotebook(f.book, notes, result.metadata) };
 }
@@ -980,4 +1000,24 @@ test('an early source jump retries until the native preview source map is availa
   f.compiler.inverse(point.page, point.x + 4, point.y - 3);
   await wait(() => f.sources.length > 0);
   assert.equal(f.sources.at(-1).selection.start.line, line);
+});
+
+test('rapid initial source updates always export the newest native template snapshot', async (t) => {
+  for (let run = 0; run < 12; run++) {
+    const f = await fixture(t);
+    f.compiler.update(
+      f.entry,
+      `#import "${PACKAGE_IMPORT}": *
+#show: notebook.with(pdf: "book.pdf", size: (300pt, 450pt))
+#sidenote(1)
+#metadata((kind: "rapid-latest", run: ${run}))
+LATEST ${run}
+`,
+    );
+    const r = await compile(f);
+    assert.equal(r.metadata.find((x) => x.kind === 'rapid-latest')?.run, run);
+    f.compiler.dispose();
+    if (f.compiler.proc.exitCode === null && f.compiler.proc.signalCode === null)
+      await new Promise((resolve) => f.compiler.proc.once('exit', resolve));
+  }
 });
