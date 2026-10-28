@@ -18,7 +18,7 @@ Read a PDF alongside native Typst notes. Keep the original text selectable, jump
 若之前安装过发布者为 `archi` 的本地开发版，请先卸载旧版扩展，再安装 `ArcBC` 版，避免两份扩展注册同名命令。笔记文件和本地 Typst 模板包可继续使用。
 
 ```typst
-#import "@local/typst-pdf-notebook:0.3.2": *
+#import "@local/typst-pdf-notebook:0.3.3": *
 #show: notebook.with(pdf: "book.pdf")
 
 #note("习题1A")
@@ -39,32 +39,38 @@ $a + b = b + a$
 
 默认排版基于 [Chengsi（澄思）0.1.2](https://typst.app/universe/package/chengsi/)。正文、公式、定理、证明等样式来自内置的 Chengsi；封面、目录和章强制换页在插页模式中固定关闭。标题使用紧凑的节标题样式，并保持原生编号和交叉引用。纸张仍使用原 PDF 的尺寸。
 
-模板实现已随插件内置，不需要在书籍文件夹复制整份 `.typ`。插件在激活时将它安装为标准 Typst 本地包；导入固定版本后，Tinymist 和 Typst CLI 都能直接识别。Windows 的默认安装位置是 `%APPDATA%/typst/packages/local/typst-pdf-notebook/0.3.2`；也支持 `TYPST_PACKAGE_PATH` 环境变量。Chengsi 的源码、三套配色和代码高亮资源均随插件分发，默认编译不需要下载外部包。参考 [Typst 本地包说明](https://github.com/typst/packages#local-packages)。插件不会覆盖本地包中已有的不同内容。
+模板实现已随插件内置，不需要在书籍文件夹复制整份 `.typ`。插件在激活时将它安装为标准 Typst 本地包；导入固定版本后，Tinymist 和 Typst CLI 都能直接识别。Windows 的默认安装位置是 `%APPDATA%/typst/packages/local/typst-pdf-notebook/0.3.3`；也支持 `TYPST_PACKAGE_PATH` 环境变量。Chengsi 的源码、三套配色和代码高亮资源均随插件分发，默认编译不需要下载外部包。参考 [Typst 本地包说明](https://github.com/typst/packages#local-packages)。插件不会覆盖本地包中已有的不同内容。
 
-旧版 `0.2.0`、`0.3.0` 和 `0.3.1` 模板也随插件提供，已有笔记可继续编译。需要采用最新默认行为时，右键笔记入口（或旧模板配置文件）→ **切换到 Chengsi 模板**，也可从命令面板执行 **PDF Notebook: 切换到 Chengsi 模板**，把旧版本导入更新到 `0.3.2`。这个命令通过编辑器修改 import，保留正文和未保存的修改；标准的 `note, notebook` 导入会变成 `*`，自定义导入和别名保持原样，是否保存由你决定。
+旧版 `0.2.0`、`0.3.0`、`0.3.1` 和 `0.3.2` 模板也随插件提供，已有笔记可继续编译。需要采用最新默认行为时，右键笔记入口（或旧模板配置文件）→ **切换到 Chengsi 模板**，也可从命令面板执行 **PDF Notebook: 切换到 Chengsi 模板**，把旧版本导入更新到 `0.3.3`。这个命令通过编辑器修改 import，保留正文和未保存的修改；标准的 `note, notebook` 导入会变成 `*`，自定义导入和别名保持原样，是否保存由你决定。
 
 ## 页内右侧便签
 
-在笔记标记上加 `placement: "right"`，把该笔记放到指定原页右侧。预览显示一张加宽页面，导出时用它替换原页，总页数不增加；原书仍是可复制文字的 PDF，笔记仍支持源码双向定位。页码、书签以及直接顶格写正文的用法都不变：
+使用 `#sidenote(页码或书签)`，也可写成 `#note(页码或书签, right)`，把该笔记放到指定原页右侧。预览显示一张加宽页面，导出时用它替换原页，总页数不增加；原书文字可复制，笔记支持源码双向定位。便签默认宽度为主页的三分之一，没有页头、页脚和页码，后面直接顶格写正文：
 
 ```typst
-#note(28, placement: "right", title: "这页的想法")
+#sidenote(15)
 
 = 我的理解
 
-在原书第 28 页右边直接记笔记。
+在原书第 15 页右边直接记笔记。
 
-#note("习题1A", placement: "right")
+#note("习题1A", right)
 #include "notes/answers-1a.typ"
+
+#sidenote(28, width: 50%)
+
+这一页使用主页一半宽度的便签。
 
 #note(30)
 
 这份笔记仍是原书第 30 页后的普通附页。
 ```
 
-右侧区域沿用 `notebook.with(size: ...)` 的笔记纸张尺寸，原页保持原始大小、不缩放。笔记超过一页时，整份笔记自动改为现有的普通附页；缩短后又会恢复到右侧。为了让一页只有一个右侧区域，同一原页的便签内容应写在同一处 `#note` 中；若同一页有多份右侧便签，或该原页高度小于笔记纸张高度，也会改为普通附页。普通附页和右侧便签可以混用。
+`width: 50%` 表示 `notebook.with(size: ...)` 主页宽度的一半；也支持 `width: 1/2`、`width: 60mm`，或在 `notebook.with(side-width: 50%)` 中统一设置。便签高度沿用主页高度，内部页边距默认为 `6mm`，可用 `side-margin` 统一设置或单份便签的 `margin` 覆盖。原页保持原始大小，不缩放。旧的 `placement: "right"` 写法继续兼容；`right` 使用 Typst 自带的对齐值，不影响 `#align(right)`。
 
-现有笔记需要把内置模板导入更新到 `@local/typst-pdf-notebook:0.3.2` 才能使用这一选项。旧版本模板随插件保留，更新不会覆盖已有的模板包或自动改写笔记源码。完整示例见 `examples/side.notes.typ`。
+插件按实际分页检查便签。超过一页时，整份笔记自动按主页宽度重新排成普通附页，恢复普通附页的页头等样式；缩短后又恢复到右侧。脚注、定理引用和被 `include` 的正文也参与原生分页，不会先缩小字体。为了让一页只有一个右侧区域，同一原页的便签内容应写在同一处标记中；若同一页有多份右侧便签，或该原页高度小于笔记纸张高度，也会改为普通附页。普通附页和便签可以混用。分页检查通过同一 Tinymist 进程的输入参数完成，不生成额外文件；直接使用 Typst CLI 编译会得到笔记本身，自动回退和整本组合由插件处理。
+
+现有笔记需要把内置模板导入更新到 `@local/typst-pdf-notebook:0.3.3` 才能使用简写和新的默认便签宽度。旧版本模板随插件保留，更新不会覆盖已有的模板包或自动改写笔记源码。完整示例见 `examples/side.notes.typ`。
 
 ## 数学笔记与配置
 
@@ -133,7 +139,7 @@ Chengsi 配置放在同一个笔记文件的 `notebook.with(config: (...))` 中�
 
 ```typst
 // template.typ：只写配置，模板实现在插件内。
-#import "@local/typst-pdf-notebook:0.3.2" as core
+#import "@local/typst-pdf-notebook:0.3.3" as core
 #let note = core.note
 #let source-ref = core.source-ref
 #let notebook = core.notebook.with(pdf: "book.pdf", size: (176mm, 250mm))

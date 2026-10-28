@@ -181,7 +181,7 @@ class NotebookSession {
         const revision = this.revision;
         this.post({ type: 'status', text: '正在更新笔记…' });
         try {
-          const compiled = await this.compiler.compile();
+          let compiled = await this.compiler.compile();
           if (this.disposed) return;
           if (revision !== this.revision) {
             this.wanted = true;
@@ -197,8 +197,10 @@ class NotebookSession {
             this.bookPath = bookPath;
             this.bookVersion = `${stat.size}-${stat.mtimeMs}`;
           }
-          const notes = await PDFDocument.load(compiled.bytes, { updateMetadata: false });
-          const plan = planNotebook(this.book, notes, compiled.metadata);
+          compiled = await this.compiler.compile({ book: this.book, snapshot: compiled });
+          const notes =
+            compiled.notes || (await PDFDocument.load(compiled.bytes, { updateMetadata: false }));
+          const plan = compiled.plan || planNotebook(this.book, notes, compiled.metadata);
           if (revision !== this.revision) {
             this.wanted = true;
             continue;

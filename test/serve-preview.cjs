@@ -38,11 +38,12 @@ const compiler = new NotebookCompiler({
 async function initialize() {
   await installTemplate(extension);
   await compiler.start([{ path: entry, text: fs.readFileSync(entry, 'utf8') }]);
-  const r = await compiler.compile(),
-    config = r.metadata.find((x) => x.kind === 'pdf-notebook');
+  let r = await compiler.compile();
+  const config = r.metadata.find((x) => x.kind === 'pdf-notebook');
   book = await loadBook(fs.readFileSync(path.resolve(root, config.pdf)));
-  notes = await PDFDocument.load(r.bytes);
-  plan = planNotebook(book, notes, r.metadata);
+  r = await compiler.compile({ book, snapshot: r });
+  notes = r.notes || (await PDFDocument.load(r.bytes));
+  plan = r.plan || planNotebook(book, notes, r.metadata);
   state = {
     type: 'document',
     bookUrl: '/source.pdf',

@@ -143,7 +143,7 @@ function planNotebook(book, notes, metadata) {
     return {
       ...n,
       placement,
-      requestedPlacement: placement,
+      requestedPlacement: n.requestedPlacement ?? placement,
       after: resolve(n.after),
       first: n.page,
       last: end,

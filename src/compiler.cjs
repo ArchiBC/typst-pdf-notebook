@@ -1,6 +1,8 @@
 const { spawn } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 const WebSocket = require('ws');
+const { PDFDocument } = require('pdf-lib');
+const { planNotebook } = require('./document.cjs');
 const { validateServer } = require('./tinymist.cjs');
 
 class NotebookCompiler {
@@ -32,6 +34,8 @@ class NotebookCompiler {
     this.disposed = false;
     this.log = '';
     this.protocolReady = false;
+    this.compileQueue = Promise.resolve();
+    this.noteLayout = {};
   }
   send(message) {
     if (!this.disposed && this.proc?.stdin.writable && !this.proc.stdin.destroyed) {
@@ -83,6 +87,7 @@ class NotebookCompiler {
       customizedShowDocument: false,
     };
     this.configuration = config;
+    this.baseExtraArgs = config.typstExtraArgs.slice();
     this.proc = spawn(this.binary, ['lsp'], { cwd: this.root, windowsHide: true });
     this.proc.stdin.on('error', (e) => {
       if (!this.disposed) this.fail(e);
@@ -148,7 +153,7 @@ class NotebookCompiler {
       const prefix = data.subarray(0, 20).toString();
       if (prefix.startsWith('jump,') || prefix.startsWith('viewport,')) {
         const [page, x, y] = data.toString().split(',')[1].split(' ').map(Number);
-        if ([page, x, y].every(Number.isFinite)) this.onPosition?.({ page, x, y });
+        if (!this.fitting && [page, x, y].every(Number.isFinite)) this.onPosition?.({ page, x, y });
       } else this.vectorBytes += data.length;
     });
     this.socket.on('error', (e) => this.onLog(`定位连接：${e.message}`));
@@ -210,7 +215,80 @@ class NotebookCompiler {
     this.opened.delete(uri);
     if (this.protocolReady) this.notify('textDocument/didClose', { textDocument: { uri } });
   }
-  async compile() {
+  compile(options = {}) {
+    // Configuration changes and exports share one native compiler. Serialize
+    // them so two callers cannot receive different pagination snapshots.
+    const pending = this.compileQueue.then(() => this.fitNotes(options));
+    this.compileQueue = pending.catch(() => {});
+    return pending;
+  }
+  setNoteLayout(layout) {
+    const normalized = Object.fromEntries(
+      Object.entries(layout).sort(([a], [b]) => a.localeCompare(b)),
+    );
+    if (JSON.stringify(this.noteLayout) === JSON.stringify(normalized)) return;
+    this.noteLayout = normalized;
+    this.configuration.typstExtraArgs = [
+      ...this.baseExtraArgs,
+      '--input',
+      `__pdf_notebook_layout=${JSON.stringify(normalized)}`,
+    ];
+    this.notify('workspace/didChangeConfiguration', { settings: { tinymist: this.configuration } });
+  }
+  async fitNotes({ book, snapshot } = {}) {
+    this.fitting = true;
+    try {
+      if (!snapshot) this.setNoteLayout({});
+      let result = snapshot || (await this.compileConfigured());
+      const config = result.metadata.find((x) => x?.kind === 'pdf-notebook');
+      // Immutable older packages retain their original behavior.
+      if (config?.sideLayout !== 1) return result;
+      const starts = result.metadata.filter((x) => x?.kind === 'pdf-note');
+      if (!book && !starts.some((n) => n.placement === 'right')) return result;
+      let notes = result.notes || (await PDFDocument.load(result.bytes, { updateMetadata: false }));
+      const layout = { ...this.noteLayout };
+      let plan;
+      if (book) {
+        plan = planNotebook(book, notes, result.metadata);
+        for (const n of plan.blocks)
+          if (n.requestedPlacement === 'right' && n.fallback) layout[n.id] = n.fallback;
+      } else {
+        for (let i = 0; i < starts.length; i++) {
+          const n = starts[i],
+            last = i + 1 < starts.length ? starts[i + 1].page - 1 : notes.getPageCount();
+          if (n.placement === 'right' && last > n.page) layout[n.id] = 'overflow';
+        }
+      }
+      const before = JSON.stringify(this.noteLayout);
+      this.setNoteLayout(layout);
+      if (before !== JSON.stringify(this.noteLayout)) {
+        result = await this.compileConfigured();
+        notes = await PDFDocument.load(result.bytes, { updateMetadata: false });
+        if (book) plan = planNotebook(book, notes, result.metadata);
+      }
+      return { ...result, notes, ...(plan ? { plan } : {}) };
+    } finally {
+      this.fitting = false;
+    }
+  }
+  async compileConfigured() {
+    // Tinymist normally applies didChangeConfiguration before the next export.
+    // Check its acknowledgement rather than publishing a stale fallback layout.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const result = await this.compileOnce();
+      const config = result.metadata.find((x) => x?.kind === 'pdf-notebook');
+      if (config?.sideLayout !== 1) return result;
+      const actual = config.noteLayout || {},
+        wanted = this.noteLayout;
+      if (
+        Object.keys(actual).length === Object.keys(wanted).length &&
+        Object.keys(wanted).every((key) => actual[key] === wanted[key])
+      )
+        return result;
+    }
+    throw Error('Tinymist 尚未应用便签分页配置，请重试预览。');
+  }
+  async compileOnce() {
     const [pdf, meta] = await Promise.all([
       this.command('tinymist.exportPdf', this.entry, {}, { write: false }),
       this.command(

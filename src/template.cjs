@@ -3,7 +3,7 @@ const path = require('node:path');
 const os = require('node:os');
 
 const PACKAGE_NAME = 'typst-pdf-notebook';
-const PACKAGE_VERSION = '0.3.2';
+const PACKAGE_VERSION = '0.3.3';
 const PACKAGE_IMPORT = `@local/${PACKAGE_NAME}:${PACKAGE_VERSION}`;
 
 function packageRoot({ platform = process.platform, env = process.env, home = os.homedir() } = {}) {
@@ -53,6 +53,7 @@ async function installTemplate(extensionRoot, packages = packageRoot()) {
   ]);
   const previousChengsi = new Map(files);
   const previousUnits = new Map(files);
+  const previousSide = new Map(files);
   for (const name of ['notebook.typ', 'math.typ', 'typst.toml']) {
     previousChengsi.set(
       name,
@@ -62,12 +63,17 @@ async function installTemplate(extensionRoot, packages = packageRoot()) {
       name,
       await fs.readFile(path.join(extensionRoot, 'templates/legacy/0.3.1', name)),
     );
+    previousSide.set(
+      name,
+      await fs.readFile(path.join(extensionRoot, 'templates/legacy/0.3.2', name)),
+    );
   }
   const bundles = [
     { target: path.join(packages, 'local', PACKAGE_NAME, PACKAGE_VERSION), files },
     { target: path.join(packages, 'local', PACKAGE_NAME, '0.2.0'), files: legacy },
     { target: path.join(packages, 'local', PACKAGE_NAME, '0.3.0'), files: previousChengsi },
     { target: path.join(packages, 'local', PACKAGE_NAME, '0.3.1'), files: previousUnits },
+    { target: path.join(packages, 'local', PACKAGE_NAME, '0.3.2'), files: previousSide },
   ];
   const conflict = (file) => Error(`Typst 本地包已存在不同内容，未覆盖：${file}`);
   // Check the entire existing package before filling missing files; never replace user edits.
@@ -137,10 +143,10 @@ function templateUpgradeEdits(source) {
     !/^\s*#let\s+notebook\s*=\s*[\w-]+\.notebook\b/m.test(source)
   )
     return [];
-  const marker = /^\s*#note\s*\(/m.exec(source);
+  const marker = /^\s*#(?:note|sidenote)\s*\(/m.exec(source);
   const prelude = source.slice(0, marker?.index ?? source.length);
   const imported =
-    /^[ \t]*#import\s+"(@local\/typst-pdf-notebook:0\.(?:2\.0|3\.[01]))"([^\r\n]*)/m.exec(prelude);
+    /^[ \t]*#import\s+"(@local\/typst-pdf-notebook:0\.(?:2\.0|3\.[012]))"([^\r\n]*)/m.exec(prelude);
   if (!imported) return [];
   const start = imported.index + imported[0].indexOf(imported[1]);
   const edits = [{ start, end: start + imported[1].length, text: PACKAGE_IMPORT }];

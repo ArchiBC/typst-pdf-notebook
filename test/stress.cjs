@@ -146,8 +146,9 @@ async function main() {
   }
   const largeBook = await loadBook(await synthetic.save());
   const makeState = async (book, result, name) => {
-    const notes = await PDFDocument.load(result.bytes);
-    const plan = planNotebook(book, notes, result.metadata);
+    result = await compiler.compile({ book, snapshot: result });
+    const notes = result.notes || (await PDFDocument.load(result.bytes));
+    const plan = result.plan || planNotebook(book, notes, result.metadata);
     return {
       type: 'document',
       bookUrl: `/books/${name}.pdf`,
@@ -166,8 +167,7 @@ async function main() {
     long: await makeState(originalBook, longResult, 'real'),
   };
   const sideSource =
-    header +
-    '#note(1, placement: "right")\n\nSIDE PREVIEW TARGET.\n\n#source-ref(3)[RETURN TO SOURCE]\n';
+    header + '#note(1, right)\n\nSIDE PREVIEW TARGET.\n\n#source-ref(3)[RETURN TO SOURCE]\n';
   compiler.update(entry, sideSource);
   const sideResult = await compiler.compile();
   states.side = await makeState(originalBook, sideResult, 'real');

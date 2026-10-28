@@ -28,14 +28,15 @@ async function main() {
   });
   try {
     await compiler.start([{ path: entry, text: await fs.readFile(entry, 'utf8') }]);
-    const result = await compiler.compile(),
-      config = result.metadata.find((x) => x.kind === 'pdf-notebook');
+    let result = await compiler.compile();
+    const config = result.metadata.find((x) => x.kind === 'pdf-notebook');
     if (!config?.pdf) throw Error('Notebook metadata is missing.');
     const bookPath = path.resolve(root, config.pdf);
     await assertExportTarget(target, bookPath, entry);
-    const book = await loadBook(await fs.readFile(bookPath)),
-      notes = await PDFDocument.load(result.bytes),
-      plan = planNotebook(book, notes, result.metadata),
+    const book = await loadBook(await fs.readFile(bookPath));
+    result = await compiler.compile({ book, snapshot: result });
+    const notes = result.notes || (await PDFDocument.load(result.bytes)),
+      plan = result.plan || planNotebook(book, notes, result.metadata),
       bytes = await exportNotebook(book, notes, plan);
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.writeFile(target, bytes);

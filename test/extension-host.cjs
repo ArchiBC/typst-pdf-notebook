@@ -63,7 +63,7 @@ async function run() {
   const api = await extension.activate();
   const starter = await vscode.workspace.openTextDocument(initialized);
   const starterText = starter.getText();
-  assert.match(starterText, /@local\/typst-pdf-notebook:0\.3\.2/);
+  assert.match(starterText, /@local\/typst-pdf-notebook:0\.3\.3/);
   assert.match(starterText, /size: \(498\.9pt, 708\.66pt\)/);
   assert.match(starterText, /pdf: "练习册.PDF"/);
   assert.equal(starterText.includes('template.typ'), false);
@@ -136,7 +136,7 @@ async function run() {
   await replace(oldDoc, oldSource + '\nUNSAVED USER TEXT');
   await vscode.window.showTextDocument(oldDoc, { viewColumn: vscode.ViewColumn.One });
   assert.equal(await vscode.commands.executeCommand('pdfNotebook.useChengsi'), true);
-  assert.ok(oldDoc.getText().startsWith('#import "@local/typst-pdf-notebook:0.3.2": *'));
+  assert.ok(oldDoc.getText().startsWith('#import "@local/typst-pdf-notebook:0.3.3": *'));
   assert.ok(oldDoc.getText().endsWith('OLD NOTE BODY\n\nUNSAVED USER TEXT'));
   assert.equal(fs.readFileSync(oldEntry, 'utf8'), oldSource);
   assert.equal(oldDoc.isDirty, true);
@@ -341,7 +341,7 @@ async function run() {
     pages: session.snapshot.plan.rows.length,
   };
   // A virtual right column must use the same source map as an inserted note.
-  const sideMain = original.replace('#note("习题1A")', '#note("习题1A", placement: "right")');
+  const sideMain = original.replace('#note("习题1A")', '#note("习题1A", right)');
   const sideRevision = session.snapshot.revision;
   await replace(main, sideMain);
   await wait(
@@ -353,7 +353,7 @@ async function run() {
   const sideRow = session.snapshot.plan.rows.find((x) => x.kind === 'side');
   assert.equal(sideRow.page, 23);
   assert.equal(session.snapshot.plan.rows.length, 342);
-  assert.ok(Math.abs(sideRow.width - 997.8) < 0.01);
+  assert.ok(Math.abs(sideRow.width - 665.2) < 0.01);
   const sideEditor = await vscode.window.showTextDocument(answer, {
     viewColumn: vscode.ViewColumn.One,
   });
@@ -398,7 +398,7 @@ async function run() {
   const { PDFDocument } = require('pdf-lib');
   const sidePdf = await PDFDocument.load(fs.readFileSync(sideExport));
   assert.equal(sidePdf.getPageCount(), 342);
-  assert.ok(Math.abs(sidePdf.getPage(22).getWidth() - 997.8) < 0.01);
+  assert.ok(Math.abs(sidePdf.getPage(22).getWidth() - 665.2) < 0.01);
   const sideBody = answer.getText(),
     overflowRevision = session.snapshot.revision;
   await replace(answer, sideBody + '\n#lorem(1200)\n');
