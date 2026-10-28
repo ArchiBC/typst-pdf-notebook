@@ -708,7 +708,10 @@ async function main() {
         viewerBounds.x + viewerBounds.width * 0.75,
         viewerBounds.y + viewerBounds.height * 0.5,
       );
-      await page.mouse.wheel(0, 500);
+      // A narrow side column makes the combined page taller when fitted to width.
+      // Scroll beyond that actual sheet before expecting a new current page.
+      const sheetBounds = await page.locator('.sheet.side').boundingBox();
+      await page.mouse.wheel(0, Math.max(viewerBounds.height, sheetBounds.height) + 50);
       await page.waitForFunction(() => document.querySelector('#page').value !== '1');
       await page.locator('#page').fill('1');
       await page.locator('#page').press('Enter');
