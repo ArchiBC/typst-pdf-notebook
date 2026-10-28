@@ -145,9 +145,14 @@ function templateUpgradeEdits(source) {
     return [];
   const marker = /^\s*#(?:note|sidenote)\s*\(/m.exec(source);
   const prelude = source.slice(0, marker?.index ?? source.length);
-  const imported =
-    /^[ \t]*#import\s+"(@local\/typst-pdf-notebook:0\.(?:2\.0|3\.[012]))"([^\r\n]*)/m.exec(prelude);
+  const imported = /^[ \t]*#import\s+"(@local\/typst-pdf-notebook:\d+\.\d+\.\d+)"([^\r\n]*)/m.exec(
+    prelude,
+  );
   if (!imported) return [];
+  const previous = imported[1].split(':').at(-1).split('.').map(Number);
+  const current = PACKAGE_VERSION.split('.').map(Number);
+  const different = previous.findIndex((part, index) => part !== current[index]);
+  if (different < 0 || previous[different] > current[different]) return [];
   const start = imported.index + imported[0].indexOf(imported[1]);
   const edits = [{ start, end: start + imported[1].length, text: PACKAGE_IMPORT }];
   const standard = /^:\s*((?:notebook\s*,\s*note|note\s*,\s*notebook))\s*(?:\/\/.*)?$/.exec(

@@ -466,6 +466,24 @@ async function activate(context) {
   const template = await ensureTemplate(vscode.window.activeTextEditor?.document.uri);
   output.appendLine(`Typst 模板：${template.import} (${template.target})`);
   const sessions = new Map();
+  let upgradeAvailable = false,
+    upgradeTimer,
+    upgradeRevision = 0;
+  async function refreshUpgradeContext() {
+    clearTimeout(upgradeTimer);
+    const revision = ++upgradeRevision;
+    const doc = vscode.window.activeTextEditor?.document;
+    const available = Boolean(
+      doc?.uri.scheme === 'file' &&
+      doc.languageId === 'typst' &&
+      templateUpgradeEdits(doc.getText()).length,
+    );
+    await vscode.commands.executeCommand('setContext', 'pdfNotebook.canUpgradeTemplate', available);
+    if (revision === upgradeRevision) upgradeAvailable = available;
+  }
+  function updateUpgradeContext() {
+    refreshUpgradeContext().catch((error) => output.appendLine(error.stack || String(error)));
+  }
   async function useChengsi(uri) {
     const doc =
       uri?.scheme === 'file'
@@ -473,6 +491,8 @@ async function activate(context) {
         : vscode.window.activeTextEditor?.document;
     if (!doc || doc.uri.scheme !== 'file' || path.extname(doc.uri.fsPath).toLowerCase() !== '.typ')
       throw Error('请先打开要升级的 .typ 笔记入口或模板配置文件。');
+    await ensureTemplate(doc.uri);
+    if (doc.isClosed) return false;
     const edits = templateUpgradeEdits(doc.getText());
     if (!edits.length) {
       vscode.window.showInformationMessage(
@@ -489,6 +509,7 @@ async function activate(context) {
       );
     if (!(await vscode.workspace.applyEdit(edit))) throw Error('未能更新模板导入。');
     await vscode.window.showTextDocument(doc, { preview: false });
+    await refreshUpgradeContext();
     return true;
   }
   const entryStateKey = (folder) => `pdfNotebook.entry:${folder.uri.toString()}`;
@@ -617,6 +638,12 @@ async function activate(context) {
       }
     };
   context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor(updateUpgradeContext),
+    vscode.workspace.onDidChangeTextDocument((event) => {
+      if (event.document !== vscode.window.activeTextEditor?.document) return;
+      clearTimeout(upgradeTimer);
+      upgradeTimer = setTimeout(updateUpgradeContext, 100);
+    }),
     vscode.workspace.onDidOpenTextDocument((doc) => {
       if (doc.uri.scheme === 'file' && doc.languageId === 'typst')
         ensureTemplate(doc.uri).catch((error) => output.appendLine(error.stack || String(error)));
@@ -669,10 +696,20 @@ async function activate(context) {
     ),
     {
       dispose: () => {
+        clearTimeout(upgradeTimer);
         for (const s of sessions.values()) s.dispose();
       },
     },
   );
-  return { getSession, sessions, ensureTemplate, integration };
+  await refreshUpgradeContext();
+  return {
+    getSession,
+    sessions,
+    ensureTemplate,
+    integration,
+    get canUpgradeTemplate() {
+      return upgradeAvailable;
+    },
+  };
 }
 module.exports = { activate, NotebookSession, inside };

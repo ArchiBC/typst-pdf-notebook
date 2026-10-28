@@ -61,6 +61,16 @@ async function run() {
   );
   assert.equal(extension.isActive, true);
   const api = await extension.activate();
+  const upgradeButton = extension.packageJSON.contributes.menus['editor/title'].find(
+    (item) => item.command === 'pdfNotebook.useChengsi',
+  );
+  assert.ok(upgradeButton.when.includes('pdfNotebook.canUpgradeTemplate'));
+  assert.equal(
+    extension.packageJSON.contributes.commands.find(
+      (item) => item.command === 'pdfNotebook.useChengsi',
+    ).title,
+    '升级笔记模板',
+  );
   const starter = await vscode.workspace.openTextDocument(initialized);
   const starterText = starter.getText();
   assert.match(starterText, /@local\/typst-pdf-notebook:0\.3\.3/);
@@ -135,11 +145,23 @@ async function run() {
   const oldDoc = await vscode.workspace.openTextDocument(oldEntry);
   await replace(oldDoc, oldSource + '\nUNSAVED USER TEXT');
   await vscode.window.showTextDocument(oldDoc, { viewColumn: vscode.ViewColumn.One });
+  await wait(() => api.canUpgradeTemplate, 'upgrade button appears for old template');
+  await vscode.window.showTextDocument(extra, { viewColumn: vscode.ViewColumn.One });
+  await wait(() => !api.canUpgradeTemplate, 'upgrade button hides for a body-only file');
+  await vscode.window.showTextDocument(oldDoc, { viewColumn: vscode.ViewColumn.One });
+  await wait(() => api.canUpgradeTemplate, 'upgrade button returns with the old notebook');
   assert.equal(await vscode.commands.executeCommand('pdfNotebook.useChengsi'), true);
   assert.ok(oldDoc.getText().startsWith('#import "@local/typst-pdf-notebook:0.3.3": *'));
   assert.ok(oldDoc.getText().endsWith('OLD NOTE BODY\n\nUNSAVED USER TEXT'));
   assert.equal(fs.readFileSync(oldEntry, 'utf8'), oldSource);
   assert.equal(oldDoc.isDirty, true);
+  await wait(() => !api.canUpgradeTemplate, 'upgrade button hides after migration');
+  await vscode.commands.executeCommand('undo');
+  await wait(() => api.canUpgradeTemplate, 'undo restores the old template and upgrade button');
+  assert.equal(oldDoc.getText(), oldSource + '\nUNSAVED USER TEXT');
+  await vscode.commands.executeCommand('redo');
+  await wait(() => !api.canUpgradeTemplate, 'redo hides the upgrade button again');
+  assert.ok(oldDoc.getText().endsWith('OLD NOTE BODY\n\nUNSAVED USER TEXT'));
   const migratedSession = await api.getSession();
   assert.equal(migratedSession.snapshot.plan.config.template, 'chengsi');
   assert.equal(migratedSession.snapshot.plan.rows.length, 342);
@@ -173,6 +195,8 @@ async function run() {
       includedFileEntryDetected: true,
       chengsiDefault: true,
       migrationPreservesUnsavedBody: true,
+      upgradeButtonFollowsActiveEditor: true,
+      templateUpgradeUndoRedo: true,
       tinymistAutoDependency: true,
       coldPackageCacheRecovered: true,
       editorUnsavedContentSurvivesRestart: true,

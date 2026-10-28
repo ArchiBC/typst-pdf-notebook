@@ -7,6 +7,7 @@ const {
   packageRoot,
   installTemplate,
   PACKAGE_IMPORT,
+  PACKAGE_VERSION,
   templateUpgradeEdits,
 } = require('../src/template.cjs');
 
@@ -19,6 +20,19 @@ test('vendored Chengsi files retain their upstream byte hashes on every platform
       .update(await fs.readFile(path.join(root, file.path)))
       .digest('hex');
     assert.equal(hash, file.sha256, file.path);
+  }
+});
+
+test('template upgrades compare numeric versions and never downgrade a newer notebook', () => {
+  const source = (version) =>
+    `#import "@local/typst-pdf-notebook:${version}": *\n#show: notebook\n#note(1)\nBODY\n`;
+  assert.ok(templateUpgradeEdits(source('0.1.0')).length > 0);
+  const current = PACKAGE_VERSION.split('.').map(Number);
+  assert.equal(templateUpgradeEdits(source(PACKAGE_VERSION)).length, 0);
+  for (let index = 0; index < 3; index++) {
+    const newer = current.slice();
+    newer[index] += 10;
+    assert.equal(templateUpgradeEdits(source(newer.join('.'))).length, 0);
   }
 });
 

@@ -41,7 +41,9 @@ $a + b = b + a$
 
 模板实现已随插件内置，不需要在书籍文件夹复制整份 `.typ`。插件在激活时将它安装为标准 Typst 本地包；导入固定版本后，Tinymist 和 Typst CLI 都能直接识别。Windows 的默认安装位置是 `%APPDATA%/typst/packages/local/typst-pdf-notebook/0.3.3`；也支持 `TYPST_PACKAGE_PATH` 环境变量。Chengsi 的源码、三套配色和代码高亮资源均随插件分发，默认编译不需要下载外部包。参考 [Typst 本地包说明](https://github.com/typst/packages#local-packages)。插件不会覆盖本地包中已有的不同内容。
 
-旧版 `0.2.0`、`0.3.0`、`0.3.1` 和 `0.3.2` 模板也随插件提供，已有笔记可继续编译。需要采用最新默认行为时，右键笔记入口（或旧模板配置文件）→ **切换到 Chengsi 模板**，也可从命令面板执行 **PDF Notebook: 切换到 Chengsi 模板**，把旧版本导入更新到 `0.3.3`。这个命令通过编辑器修改 import，保留正文和未保存的修改；标准的 `note, notebook` 导入会变成 `*`，自定义导入和别名保持原样，是否保存由你决定。
+旧版笔记打开时，编辑器右上角会出现 **升级笔记模板**（向上箭头）按钮。点击后更新到当前插件内置的模板版本；升级完成后按钮隐藏，也支持撤销和重做。按钮随当前编辑器和未保存的 import 变化刷新，不自动改写或保存文件；较新版本的模板不会被降级。
+
+旧版 `0.2.0`、`0.3.0`、`0.3.1` 和 `0.3.2` 模板也随插件提供，已有笔记可继续编译。需要采用最新默认行为时，右键笔记入口（或旧模板配置文件）→ **升级笔记模板**，也可从命令面板执行 **PDF Notebook: 升级笔记模板**，把旧版本导入更新到 `0.3.3`。这个命令通过编辑器修改 import，保留正文和未保存的修改；标准的 `note, notebook` 导入会变成 `*`，自定义导入和别名保持原样，是否保存由你决定。
 
 ## 页内右侧便签
 
@@ -190,7 +192,7 @@ npm run package
 npm run test:prepare
 npm test
 npm run test:host
-code --install-extension .\output\typst-pdf-notebook-0.3.5.vsix --force
+code --install-extension .\output\typst-pdf-notebook-0.3.6.vsix --force
 ```
 
 按 F5 可启动扩展开发宿主。`test:prepare` 下载指定版本的 VS Code，在空扩展目录安装本项目 VSIX，验证 Tinymist 自动依赖安装，并准备固定版本的测试字体。`NOTEBOOK_VSCODE_VERSION` 可指定 VS Code 版本；本地可用 `NOTEBOOK_CODE_BIN` 指定已有程序，或用 `NOTEBOOK_FONT_PATHS`（JSON 路径数组）使用本机字体。

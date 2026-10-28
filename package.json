@@ -2,7 +2,7 @@
   "name": "typst-pdf-notebook",
   "displayName": "Typst PDF Notebook",
   "description": "原书按需阅读、Typst 笔记双向定位，导出时插页。",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "publisher": "ArcBC",
   "icon": "media/icon.png",
   "homepage": "https://github.com/ArchiBC/typst-pdf-notebook#readme",
@@ -59,8 +59,9 @@
     "commands": [
       {
         "command": "pdfNotebook.useChengsi",
-        "title": "切换到 Chengsi 模板",
-        "category": "PDF Notebook"
+        "title": "升级笔记模板",
+        "category": "PDF Notebook",
+        "icon": "$(arrow-up)"
       },
       {
         "command": "pdfNotebook.newNote",
@@ -109,6 +110,11 @@
           "command": "pdfNotebook.open",
           "when": "editorLangId == typst",
           "group": "navigation@1"
+        },
+        {
+          "command": "pdfNotebook.useChengsi",
+          "when": "editorLangId == typst && pdfNotebook.canUpgradeTemplate",
+          "group": "navigation@2"
         }
       ]
     },
