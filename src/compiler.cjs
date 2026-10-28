@@ -38,6 +38,8 @@ class NotebookCompiler {
     this.noteLayout = {};
     this.positionWaiters = new Set();
     this.forwardSerial = 0;
+    this.sourceRevision = 0;
+    this.sourceFence = -1;
   }
   send(message) {
     if (!this.disposed && this.proc?.stdin.writable && !this.proc.stdin.destroyed) {
@@ -211,6 +213,7 @@ class NotebookCompiler {
     }
   }
   update(file, text) {
+    this.sourceRevision++;
     const uri = pathToFileURL(file).href,
       old = this.opened.get(uri);
     const version = (old?.version || 0) + 1;
@@ -227,6 +230,7 @@ class NotebookCompiler {
       });
   }
   close(file) {
+    this.sourceRevision++;
     const uri = pathToFileURL(file).href;
     this.opened.delete(uri);
     if (this.protocolReady) this.notify('textDocument/didClose', { textDocument: { uri } });
@@ -254,6 +258,7 @@ class NotebookCompiler {
       `__pdf_notebook_layout=${JSON.stringify(normalized)}`,
     ];
     this.notify('workspace/didChangeConfiguration', { settings: { tinymist: this.configuration } });
+    this.sourceFence = -1;
   }
   async fitNotes({ book, snapshot } = {}) {
     this.fitting = true;
@@ -298,8 +303,17 @@ class NotebookCompiler {
   async compileConfigured() {
     // Tinymist normally applies didChangeConfiguration before the next export.
     // Check its acknowledgement rather than publishing a stale fallback layout.
+    let changed;
     for (let attempt = 0; attempt < 3; attempt++) {
-      const result = await this.compileOnce();
+      await this.synchronizeSources();
+      let result;
+      try {
+        result = await this.compileOnce();
+      } catch (error) {
+        if (error.code !== 'NOTEBOOK_SOURCE_CHANGED') throw error;
+        changed = error;
+        continue;
+      }
       const config = result.metadata.find((x) => x?.kind === 'pdf-notebook');
       if (config?.sideLayout !== 1) return result;
       const actual = config.noteLayout || {},
@@ -310,18 +324,33 @@ class NotebookCompiler {
       )
         return result;
     }
+    if (changed) throw changed;
     throw Error('Tinymist 尚未应用便签分页配置，请重试预览。');
   }
+  async synchronizeSources() {
+    while (!this.disposed && this.sourceFence !== this.sourceRevision) {
+      const revision = this.sourceRevision,
+        uri = this.opened.keys().next().value;
+      // A read-only LSP request fences the preceding document notifications.
+      // It uses the editor's native in-memory source without changing its text.
+      if (uri) await this.request('textDocument/documentSymbol', { textDocument: { uri } });
+      this.sourceFence = revision;
+    }
+  }
   async compileOnce() {
-    const [pdf, meta] = await Promise.all([
-      this.command('tinymist.exportPdf', this.entry, {}, { write: false }),
-      this.command(
-        'tinymist.exportQuery',
-        this.entry,
-        { selector: 'metadata', field: 'value', format: 'json' },
-        { write: false },
-      ),
-    ]);
+    const revision = this.sourceRevision;
+    const meta = await this.command(
+      'tinymist.exportQuery',
+      this.entry,
+      { selector: 'metadata', field: 'value', format: 'json' },
+      { write: false },
+    );
+    const pdf = await this.command('tinymist.exportPdf', this.entry, {}, { write: false });
+    if (revision !== this.sourceRevision) {
+      const error = Error('笔记在编译期间已更新。');
+      error.code = 'NOTEBOOK_SOURCE_CHANGED';
+      throw error;
+    }
     if (typeof pdf?.data !== 'string' || typeof meta?.data !== 'string')
       throw Error('Tinymist 未返回笔记 PDF 或元数据；请检查源码诊断。');
     const bytes = Buffer.from(pdf.data, 'base64');

@@ -1021,3 +1021,28 @@ LATEST ${run}
       await new Promise((resolve) => f.compiler.proc.once('exit', resolve));
   }
 });
+
+test('an edit during export cannot pair old metadata with a newer PDF', async (t) => {
+  const f = await fixture(t),
+    command = f.compiler.command.bind(f.compiler);
+  const latest = `#import "${PACKAGE_IMPORT}": *
+#show: notebook.with(pdf: "book.pdf", size: (300pt, 450pt))
+#sidenote(1)
+#metadata((kind: "coherent-export", value: "LATEST"))
+LATEST BODY
+`;
+  let edited = false;
+  f.compiler.command = async (name, ...args) => {
+    const result = await command(name, ...args);
+    if (name === 'tinymist.exportQuery' && !edited) {
+      edited = true;
+      f.compiler.update(f.entry, latest);
+    }
+    return result;
+  };
+  const result = await compile(f);
+  assert.equal(result.metadata.find((x) => x.kind === 'coherent-export')?.value, 'LATEST');
+  assert.equal(result.notes.getPageCount(), 1);
+  assert.equal(result.notes.getPage(0).getWidth(), 100);
+  assert.equal(result.plan.rows[0].kind, 'side');
+});

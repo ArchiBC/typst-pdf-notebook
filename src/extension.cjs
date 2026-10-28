@@ -210,6 +210,10 @@ class NotebookSession {
           this.publish();
         } catch (error) {
           if (this.disposed) return;
+          if (revision !== this.revision) {
+            this.wanted = true;
+            continue;
+          }
           this.lastError = error;
           this.error(error);
           if (this.wanted) continue;
