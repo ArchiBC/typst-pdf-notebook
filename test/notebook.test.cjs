@@ -959,3 +959,25 @@ test('book-aware fallback reflows bookmark aliases and short pages after the fir
   assert.equal(restored.plan.blocks[0].placement, 'right');
   assert.equal(restored.notes.getPage(0).getWidth(), 100);
 });
+
+test('an early source jump retries until the native preview source map is available', async (t) => {
+  const f = await fixture(t);
+  await compile(f);
+  const command = f.compiler.command.bind(f.compiler);
+  let early = true;
+  f.compiler.command = (name, ...args) => {
+    if (name === 'tinymist.scrollPreview' && early) {
+      early = false;
+      return Promise.resolve(null);
+    }
+    return command(name, ...args);
+  };
+  const line = f.main.split('\n').findIndex((x) => x.startsWith('INLINE NOTE'));
+  await f.compiler.forward(f.entry, line, 8);
+  assert.equal(early, false);
+  assert.ok(f.positions.length > 0, 'a dropped early request must still navigate');
+  const point = f.positions.at(-1);
+  f.compiler.inverse(point.page, point.x + 4, point.y - 3);
+  await wait(() => f.sources.length > 0);
+  assert.equal(f.sources.at(-1).selection.start.line, line);
+});

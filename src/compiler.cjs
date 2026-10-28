@@ -36,6 +36,8 @@ class NotebookCompiler {
     this.protocolReady = false;
     this.compileQueue = Promise.resolve();
     this.noteLayout = {};
+    this.positionWaiters = new Set();
+    this.forwardSerial = 0;
   }
   send(message) {
     if (!this.disposed && this.proc?.stdin.writable && !this.proc.stdin.destroyed) {
@@ -157,7 +159,10 @@ class NotebookCompiler {
       const prefix = data.subarray(0, 20).toString();
       if (prefix.startsWith('jump,') || prefix.startsWith('viewport,')) {
         const [page, x, y] = data.toString().split(',')[1].split(' ').map(Number);
-        if (!this.fitting && [page, x, y].every(Number.isFinite)) this.onPosition?.({ page, x, y });
+        if (!this.fitting && [page, x, y].every(Number.isFinite)) {
+          for (const resolve of this.positionWaiters) resolve();
+          this.onPosition?.({ page, x, y });
+        }
       } else this.vectorBytes += data.length;
     });
     this.socket.on('error', (e) => this.onLog(`定位连接：${e.message}`));
@@ -329,13 +334,38 @@ class NotebookCompiler {
     return { bytes, metadata };
   }
   async forward(file, line, character) {
+    const serial = ++this.forwardSerial;
     await this.compileQueue;
-    return this.command('tinymist.scrollPreview', 'pdf-notebook', {
-      event: 'panelScrollTo',
-      filepath: file,
-      line,
-      character,
-    });
+    // PDF export and the preview watcher receive the same compilation through
+    // separate queues. An immediate jump can reach the watcher before its new
+    // source map. Retry briefly until a native position arrives; a newer cursor
+    // request supersedes this one, and blank source lines remain a harmless no-op.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (this.disposed || serial !== this.forwardSerial) return;
+      let timer,
+        finish,
+        seen = false;
+      const position = new Promise((resolve) => {
+        finish = () => {
+          seen = true;
+          resolve(true);
+        };
+        this.positionWaiters.add(finish);
+        timer = setTimeout(() => resolve(false), 120);
+      });
+      try {
+        await this.command('tinymist.scrollPreview', 'pdf-notebook', {
+          event: 'panelScrollTo',
+          filepath: file,
+          line,
+          character,
+        });
+        if (seen || (await position)) return;
+      } finally {
+        clearTimeout(timer);
+        this.positionWaiters.delete(finish);
+      }
+    }
   }
   inverse(page, x, y) {
     if (this.socket?.readyState === WebSocket.OPEN)
