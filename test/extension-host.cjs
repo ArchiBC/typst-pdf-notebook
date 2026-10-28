@@ -421,6 +421,23 @@ async function run() {
       session.snapshot.plan.rows.some((x) => x.kind === 'side'),
     'shortened note returns to the right',
   );
+  const recoveredPosition = session.positionEvents.at(-1);
+  sideEditor.selection = new vscode.Selection(2, 8, 2, 8);
+  await session.forward(sideEditor);
+  await wait(
+    () =>
+      session.positionEvents.at(-1) !== recoveredPosition &&
+      session.viewerDiagnostics?.currentOutputPage === 23,
+    'recovered side retains forward mapping',
+  );
+  const recoveredPoint = session.positionEvents.at(-1),
+    recoveredSource = session.sourceEvents.at(-1);
+  session.compiler.inverse(recoveredPoint.page, recoveredPoint.x + 5, recoveredPoint.y - 3);
+  await wait(
+    () => session.sourceEvents.at(-1) !== recoveredSource,
+    'recovered side retains inverse mapping',
+  );
+  assert.equal(session.sourceEvents.at(-1).selection.start.line, 2);
   evidence.sideNote = {
     sourcePage: 23,
     outputPages: sidePdf.getPageCount(),
@@ -429,6 +446,7 @@ async function run() {
     inverseLine: 2,
     fallbackPages,
     recovered: true,
+    recoveredSourceMapping: true,
   };
   const restoreRevision = session.snapshot.revision;
   await replace(main, original);

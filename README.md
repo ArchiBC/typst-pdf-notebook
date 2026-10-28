@@ -190,7 +190,7 @@ npm run package
 npm run test:prepare
 npm test
 npm run test:host
-code --install-extension .\output\typst-pdf-notebook-0.3.4.vsix --force
+code --install-extension .\output\typst-pdf-notebook-0.3.5.vsix --force
 ```
 
 按 F5 可启动扩展开发宿主。`test:prepare` 下载指定版本的 VS Code，在空扩展目录安装本项目 VSIX，验证 Tinymist 自动依赖安装，并准备固定版本的测试字体。`NOTEBOOK_VSCODE_VERSION` 可指定 VS Code 版本；本地可用 `NOTEBOOK_CODE_BIN` 指定已有程序，或用 `NOTEBOOK_FONT_PATHS`（JSON 路径数组）使用本机字体。

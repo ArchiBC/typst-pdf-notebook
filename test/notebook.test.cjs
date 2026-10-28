@@ -579,7 +579,8 @@ REGULAR ANSWER.
 test('an overflowing right note becomes full-size inserted pages and returns to the side after shrinking', async (t) => {
   const f = await fixture(t);
   const header = `#import "${PACKAGE_IMPORT}": *\n#show: notebook.with(pdf: "book.pdf", size: (300pt, 450pt))\n#note(1, placement: "right")\n`;
-  f.compiler.update(f.entry, header + '\n#lorem(1000)\n');
+  const enginePid = f.compiler.proc.pid;
+  f.compiler.update(f.entry, header + '\nLONG SIDE ANSWER\n\n#lorem(1000)\n');
   const long = await compile(f);
   assert.ok(long.notes.getPageCount() > 1);
   assert.equal(long.plan.blocks[0].placement, 'after');
@@ -593,11 +594,37 @@ test('an overflowing right note becomes full-size inserted pages and returns to 
   );
   const output = await loadBook(await exportNotebook(f.book, long.notes, long.plan));
   assert.equal(output.pageCount, long.plan.rows.length);
+  const longLine = (header + '\nLONG SIDE ANSWER\n')
+    .split('\n')
+    .findIndex((x) => x.startsWith('LONG SIDE'));
+  const beforeLong = f.positions.at(-1);
+  await f.compiler.forward(f.entry, longLine, 8);
+  await wait(() => f.positions.at(-1) !== beforeLong);
+  const longPoint = f.positions.at(-1),
+    beforeLongSource = f.sources.at(-1);
+  f.compiler.inverse(longPoint.page, longPoint.x + 4, longPoint.y - 3);
+  await wait(() => f.sources.at(-1) !== beforeLongSource);
+  assert.equal(f.sources.at(-1).selection.start.line, longLine);
+  f.compiler.update(f.entry, header + '#missing-note-function()');
+  await assert.rejects(() => compile(f), /unknown variable/);
   f.compiler.update(f.entry, header + '\nSHORT SIDE ANSWER\n');
   const short = await compile(f);
   assert.equal(short.plan.rows.length, f.book.pageCount);
   assert.equal(short.plan.rows[0].kind, 'side');
   assert.equal(short.plan.blocks[0].fallback, undefined);
+  assert.equal(f.compiler.proc.pid, enginePid, 'pagination reuses the same Tinymist process');
+  assert.equal(f.compiler.socket.readyState, 1, 'native source connection survives layout inputs');
+  const previousPosition = f.positions.at(-1);
+  const line = (header + '\nSHORT SIDE ANSWER\n')
+    .split('\n')
+    .findIndex((x) => x.startsWith('SHORT SIDE'));
+  await f.compiler.forward(f.entry, line, 8);
+  await wait(() => f.positions.at(-1) !== previousPosition);
+  const point = f.positions.at(-1),
+    previousSource = f.sources.at(-1);
+  f.compiler.inverse(point.page, point.x + 4, point.y - 3);
+  await wait(() => f.sources.at(-1) !== previousSource);
+  assert.equal(f.sources.at(-1).selection.start.line, line);
   assert.equal(fs.readFileSync(f.entry, 'utf8'), f.main);
 });
 

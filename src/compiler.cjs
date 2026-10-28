@@ -136,6 +136,10 @@ class NotebookCompiler {
       this.notify('textDocument/didOpen', {
         textDocument: { uri, version: doc.version, languageId: 'typst', text: doc.text },
       });
+    this.vectorBytes = 0;
+    await this.startPreview();
+  }
+  async startPreview() {
     const task = await this.command('tinymist.doStartPreview', [
       '--task-id',
       'pdf-notebook',
@@ -147,7 +151,7 @@ class NotebookCompiler {
     this.socket = new WebSocket(`ws://127.0.0.1:${task.dataPlanePort}`, {
       origin: `http://127.0.0.1:${task.staticServerPort || task.dataPlanePort}`,
     });
-    this.vectorBytes = 0;
+    this.previewStarted = true;
     this.socket.on('message', (data) => {
       if (this.disposed) return;
       const prefix = data.subarray(0, 20).toString();
@@ -168,6 +172,13 @@ class NotebookCompiler {
         reject(error);
       });
     });
+  }
+  async stopPreview() {
+    if (!this.previewStarted) return;
+    this.previewStarted = false;
+    this.socket?.terminate();
+    this.socket = null;
+    await this.command('tinymist.doKillPreview', 'pdf-notebook');
   }
   receive(msg, config) {
     if (this.disposed) return;
@@ -222,11 +233,15 @@ class NotebookCompiler {
     this.compileQueue = pending.catch(() => {});
     return pending;
   }
-  setNoteLayout(layout) {
+  async setNoteLayout(layout) {
     const normalized = Object.fromEntries(
       Object.entries(layout).sort(([a], [b]) => a.localeCompare(b)),
     );
     if (JSON.stringify(this.noteLayout) === JSON.stringify(normalized)) return;
+    // Tinymist reloads projects when inputs change, disposing their preview
+    // watchers. Close the old task before that reload and reconnect only after
+    // the final pagination is ready, keeping the same LSP process and documents.
+    await this.stopPreview();
     this.noteLayout = normalized;
     this.configuration.typstExtraArgs = [
       ...this.baseExtraArgs,
@@ -238,7 +253,7 @@ class NotebookCompiler {
   async fitNotes({ book, snapshot } = {}) {
     this.fitting = true;
     try {
-      if (!snapshot) this.setNoteLayout({});
+      if (!snapshot) await this.setNoteLayout({});
       let result = snapshot || (await this.compileConfigured());
       const config = result.metadata.find((x) => x?.kind === 'pdf-notebook');
       // Immutable older packages retain their original behavior.
@@ -260,7 +275,7 @@ class NotebookCompiler {
         }
       }
       const before = JSON.stringify(this.noteLayout);
-      this.setNoteLayout(layout);
+      await this.setNoteLayout(layout);
       if (before !== JSON.stringify(this.noteLayout)) {
         result = await this.compileConfigured();
         notes = await PDFDocument.load(result.bytes, { updateMetadata: false });
@@ -268,7 +283,11 @@ class NotebookCompiler {
       }
       return { ...result, notes, ...(plan ? { plan } : {}) };
     } finally {
-      this.fitting = false;
+      try {
+        if (!this.disposed && !this.previewStarted) await this.startPreview();
+      } finally {
+        this.fitting = false;
+      }
     }
   }
   async compileConfigured() {
@@ -309,7 +328,8 @@ class NotebookCompiler {
     }
     return { bytes, metadata };
   }
-  forward(file, line, character) {
+  async forward(file, line, character) {
+    await this.compileQueue;
     return this.command('tinymist.scrollPreview', 'pdf-notebook', {
       event: 'panelScrollTo',
       filepath: file,
