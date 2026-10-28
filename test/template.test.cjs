@@ -55,7 +55,7 @@ test('bundled package installs idempotently and refuses to overwrite user change
   assert.equal(installed.import, PACKAGE_IMPORT);
   const manifest = await fs.readFile(path.join(installed.target, 'typst.toml'), 'utf8');
   assert.match(manifest, /name = "typst-pdf-notebook"/);
-  assert.match(manifest, /version = "0\.3\.1"/);
+  assert.match(manifest, /version = "0\.3\.2"/);
   assert.ok(
     (await fs.readFile(path.join(installed.target, 'math.typ'), 'utf8')).includes(
       'chengsi/template.typ',
@@ -78,6 +78,11 @@ test('bundled package installs idempotently and refuses to overwrite user change
     await fs.readFile(path.join(installed.legacyTargets[1], 'notebook.typ'), 'utf8'),
     await fs.readFile(path.join(extension, 'templates/legacy/0.3.0/notebook.typ'), 'utf8'),
   );
+  for (const name of ['notebook.typ', 'math.typ', 'typst.toml'])
+    assert.equal(
+      await fs.readFile(path.join(installed.legacyTargets[2], name), 'utf8'),
+      await fs.readFile(path.join(extension, 'templates/legacy/0.3.1', name), 'utf8'),
+    );
   const source = path.join(installed.target, 'notebook.typ');
   const mtime = (await fs.stat(source)).mtimeMs;
   assert.equal((await installTemplate(extension, packages)).changed, false);
@@ -111,6 +116,9 @@ test('upgrading a notebook changes only its import and preserves note bodies and
   const nextChengsi = apply(chengsi);
   assert.ok(nextChengsi.startsWith(`#import "${PACKAGE_IMPORT}": *`));
   assert.ok(nextChengsi.endsWith(body.replaceAll(':0.2.0', ':0.3.0')));
+  const units = source.replaceAll(':0.2.0', ':0.3.1');
+  assert.ok(apply(units).startsWith(`#import "${PACKAGE_IMPORT}": *`));
+  assert.ok(apply(units).endsWith(body.replaceAll(':0.2.0', ':0.3.1')));
   const custom =
     '#import "@local/typst-pdf-notebook:0.2.0" as core\n#let notebook = core.notebook.with(pdf: "book.pdf")\n';
   assert.ok(apply(custom).includes(`"${PACKAGE_IMPORT}" as core`));

@@ -28,7 +28,8 @@ let book,
   geometry = [],
   notesToOutput = new Map(),
   rendering = 0,
-  anchorPending;
+  anchorPending,
+  navigationFocus;
 const nodes = new Map(),
   queue = new Set(),
   rendered = new Map(),
@@ -58,7 +59,7 @@ function report() {
     type: 'diagnostics',
     value: {
       totalPages: plan.length,
-      canvases: pages.querySelectorAll('.paper > canvas').length,
+      canvases: pages.querySelectorAll('.paper canvas').length,
       renderedPages: rendered.size,
       canvasBytes: [...canvasBytes.values()].reduce((a, b) => a + b, 0),
       notesPages: notes?.numPages,
@@ -105,22 +106,23 @@ function release(key) {
   const node = nodes.get(key);
   if (node) {
     node.token++;
-    node.textLayer?.cancel();
-    node.textLayer = null;
-    node.linkLayer = null;
+    for (const layer of node.textLayers || []) layer.cancel();
+    node.textLayers = [];
+    node.textElements = [];
+    node.linkLayers = [];
     for (const canvas of node.paper.querySelectorAll('canvas')) canvas.width = canvas.height = 0;
     node.paper.replaceChildren();
     // cleanup waits internally for cancelled PDF.js render tasks to finish.
-    node.pdfPage?.cleanup();
-    node.pdfPage = null;
+    for (const page of node.pdfPages || []) page.cleanup();
+    node.pdfPages = [];
   }
   canvasBytes.delete(key);
   rendered.delete(key);
   queue.delete(key);
 }
-function pageScale(next) {
+function pageScale(next, width = maxPageWidth) {
   const available = Math.max(180, viewer.clientWidth - (viewer.clientWidth < 480 ? 18 : 42));
-  return next === 'width' ? available / maxPageWidth : (Number(next) * 96) / 72;
+  return next === 'width' ? available / width : (Number(next) * 96) / 72;
 }
 function layout() {
   scale = pageScale(zoom);
@@ -128,15 +130,21 @@ function layout() {
     const node = nodes.get(row.key),
       paper = node?.paper;
     if (!paper) continue;
-    paper.style.width = `${row.width * scale}px`;
-    paper.style.height = `${row.height * scale}px`;
-    paper.style.setProperty('--scale-factor', scale);
-    paper.style.setProperty('--total-scale-factor', scale);
+    // Fit each sheet independently: a single widened page must not shrink the book.
+    node.scale = zoom === 'width' ? (scale * maxPageWidth) / row.width : scale;
+    paper.style.width = `${row.width * node.scale}px`;
+    paper.style.height = `${row.height * node.scale}px`;
+    paper.style.setProperty('--scale-factor', node.scale);
+    paper.style.setProperty('--total-scale-factor', node.scale);
     paper.style.setProperty('--user-unit', 1);
+    paper.style.setProperty('--scale-round-x', '1px');
+    paper.style.setProperty('--scale-round-y', '1px');
     node.style.width = paper.style.width;
-    if (node.linkLayer) {
-      node.linkLayer.style.transformOrigin = '0 0';
-      node.linkLayer.style.transform = `scale(${scale / node.rasterScale})`;
+    for (const element of node.textElements || [])
+      element.style.transform = `scale(${node.scale / node.rasterScale})`;
+    for (const layer of node.linkLayers || []) {
+      layer.style.transformOrigin = '0 0';
+      layer.style.transform = `scale(${node.scale / node.rasterScale})`;
     }
   }
   // One geometry pass after layout; scrolling never scans every page or reads layout.
@@ -180,59 +188,94 @@ async function draw(key) {
     row = node?.row;
   if (!row || rendered.has(key)) return;
   const token = node.token,
-    doc = row.kind === 'source' ? book : notes,
-    localScale = scale;
-  if (!doc) return;
+    localScale = node.scale;
+  if (!book || !notes) return;
   inFlight.set(key, token);
-  let page;
+  const activeTasks = new Set(),
+    pdfPages = [];
+  const taskGroup = {
+    cancel: () => {
+      for (const task of activeTasks) task.cancel();
+    },
+  };
+  tasks.set(key, taskGroup);
   try {
-    page = await doc.getPage(row.page);
-    if (node.token !== token || nodes.get(key) !== node) return;
-    const viewport = page.getViewport({ scale: localScale });
     const paper = node.paper;
-    node.pdfPage = page;
+    node.pdfPages = pdfPages;
+    node.textLayers = [];
+    node.textElements = [];
+    node.linkLayers = [];
     node.rasterScale = localScale;
-    const canvas = document.createElement('canvas'),
-      ratio = Math.min(
-        devicePixelRatio || 1,
-        2,
-        Math.sqrt(MAX_CANVAS_PIXELS / (viewport.width * viewport.height)),
-      );
-    canvas.width = Math.ceil(viewport.width * ratio);
-    canvas.height = Math.ceil(viewport.height * ratio);
-    paper.replaceChildren(canvas);
-    // Account for canvas memory before asynchronous drawing/text extraction.
-    // Cancelled or failed pages must never become untracked resident canvases.
+    paper.replaceChildren();
+    const ratio = Math.min(
+      devicePixelRatio || 1,
+      2,
+      Math.sqrt(MAX_CANVAS_PIXELS / (row.width * row.height * localScale ** 2)),
+    );
+    let bytes = 0;
     rendered.set(key, false);
-    canvasBytes.set(key, canvas.width * canvas.height * 4);
+    canvasBytes.set(key, 0);
     evict();
-    if (node.token !== token) return;
-    const task = page.render({
-      canvasContext: canvas.getContext('2d'),
-      viewport,
-      transform: ratio === 1 ? null : [ratio, 0, 0, ratio, 0, 0],
-    });
-    tasks.set(key, task);
-    try {
-      await task.promise;
-    } catch (e) {
-      if (e.name === 'RenderingCancelledException') return;
-      throw e;
-    } finally {
-      if (tasks.get(key) === task) tasks.delete(key);
+    for (const part of row.parts) {
+      if (node.token !== token) return;
+      const doc = part.kind === 'source' ? book : notes;
+      const page = await doc.getPage(part.page);
+      pdfPages.push(page);
+      if (node.token !== token || nodes.get(key) !== node) return;
+      const viewport = page.getViewport({ scale: localScale });
+      const container = document.createElement('div');
+      container.className = 'page-part';
+      container.dataset.kind = part.kind;
+      container.pagePart = part;
+      container.style.cssText = `left:${(part.x / row.width) * 100}%;top:${(part.y / row.height) * 100}%;width:${(part.width / row.width) * 100}%;height:${(part.height / row.height) * 100}%`;
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.ceil(viewport.width * ratio);
+      canvas.height = Math.ceil(viewport.height * ratio);
+      container.append(canvas);
+      paper.append(container);
+      bytes += canvas.width * canvas.height * 4;
+      // Track both halves before asynchronous rendering, including cancelled work.
+      canvasBytes.set(key, bytes);
+      evict();
+      if (node.token !== token) return;
+      const task = page.render({
+        canvasContext: canvas.getContext('2d'),
+        viewport,
+        transform: ratio === 1 ? null : [ratio, 0, 0, ratio, 0, 0],
+      });
+      activeTasks.add(task);
+      try {
+        await task.promise;
+      } catch (e) {
+        if (e.name === 'RenderingCancelledException') return;
+        throw e;
+      } finally {
+        activeTasks.delete(task);
+      }
+      if (node.token !== token || localScale !== node.scale) return;
+      const text = document.createElement('div');
+      text.className = 'textLayer';
+      // Freeze PDF.js font metrics until repaint; scaling the wrapper preserves
+      // glyph advances/selection bounds and leaves its rotation transform intact.
+      const shell = document.createElement('div');
+      shell.className = 'text-shell';
+      shell.style.width = `${viewport.width}px`;
+      shell.style.height = `${viewport.height}px`;
+      shell.style.setProperty('--total-scale-factor', localScale);
+      shell.style.setProperty('--scale-factor', localScale);
+      shell.append(text);
+      container.append(shell);
+      node.textElements.push(shell);
+      const layer = new pdfjs.TextLayer({
+        textContentSource: page.streamTextContent(),
+        container: text,
+        viewport,
+      });
+      node.textLayers.push(layer);
+      await layer.render();
+      if (node.token !== token) return;
+      await links(page, node, viewport, token, part, container);
     }
-    if (node.token !== token || localScale !== scale) return;
-    const text = document.createElement('div');
-    text.className = 'textLayer';
-    paper.append(text);
-    node.textLayer = new pdfjs.TextLayer({
-      textContentSource: page.streamTextContent(),
-      container: text,
-      viewport,
-    });
-    await node.textLayer.render();
-    if (node.token !== token) return;
-    await links(page, node, viewport, token);
     if (node.token !== token) return;
     rendered.set(key, true);
     evict();
@@ -242,8 +285,9 @@ async function draw(key) {
     release(key);
     throw error;
   } finally {
+    if (tasks.get(key) === taskGroup) tasks.delete(key);
     inFlight.delete(key);
-    if (node.token !== token) page?.cleanup();
+    if (node.token !== token) for (const page of pdfPages) page.cleanup();
   }
 }
 function pump() {
@@ -273,7 +317,10 @@ function pump() {
       });
   }
 }
-async function links(page, node, viewport, token) {
+function outputFor(kind, page) {
+  return plan.find((row) => row.parts.some((part) => part.kind === kind && part.page === page));
+}
+async function links(page, node, viewport, token, part, container) {
   const list = await page.getAnnotations(),
     layer = document.createElement('div');
   if (node.token !== token) return;
@@ -294,28 +341,28 @@ async function links(page, node, viewport, token) {
         annotation.unsafeUrl || annotation.url || '',
       );
       if (original) {
-        const row = plan.find((x) => x.kind === 'source' && x.page === Number(original[1]));
+        const row = outputFor('source', Number(original[1]));
         if (row) go(row.outputPage);
       } else if (annotation.url && /^https?:\/\//.test(annotation.url))
         host.postMessage({ type: 'external', url: annotation.url });
       else if (annotation.dest) {
         try {
-          const doc = node.row.kind === 'source' ? book : notes;
+          const doc = part.kind === 'source' ? book : notes;
           const dest =
             typeof annotation.dest === 'string'
               ? await doc.getDestination(annotation.dest)
               : annotation.dest;
           const no =
             typeof dest[0] === 'number' ? dest[0] + 1 : (await doc.getPageIndex(dest[0])) + 1;
-          const row = plan.find((x) => x.kind === node.row.kind && x.page === no);
+          const row = outputFor(part.kind, no);
           if (row) go(row.outputPage);
         } catch {}
       }
     };
     layer.append(a);
   }
-  node.linkLayer = layer;
-  node.paper.append(layer);
+  node.linkLayers.push(layer);
+  container.append(layer);
 }
 async function update(message) {
   const current = ++generation,
@@ -338,7 +385,7 @@ async function update(message) {
     return;
   }
   for (const [key, node] of nodes)
-    if (node.row.kind === 'note') {
+    if (node.row.parts.some((part) => part.kind === 'note')) {
       node.token++;
       release(key);
     }
@@ -347,8 +394,13 @@ async function update(message) {
   plan = message.rows;
   maxPageWidth = Math.max(499, ...plan.map((row) => row.width));
   outline = message.outline;
-  notesToOutput = new Map(plan.filter((x) => x.kind === 'note').map((x) => [x.page, x.outputPage]));
+  notesToOutput = new Map(
+    plan.flatMap((row) =>
+      row.parts.filter((part) => part.kind === 'note').map((part) => [part.page, { row, part }]),
+    ),
+  );
   const keys = new Set(plan.map((r) => r.key));
+  if (navigationFocus && !keys.has(navigationFocus.key)) navigationFocus = null;
   for (const [key, node] of nodes)
     if (!keys.has(key)) {
       release(key);
@@ -373,7 +425,13 @@ async function update(message) {
       nodes.set(row.key, node);
     }
     node.row = row;
-    const caption = `${row.outputPage} / ${plan.length}  ·  ${row.kind === 'source' ? '原书第 ' + row.page + ' 页' : row.title}`;
+    const label =
+      row.kind === 'source'
+        ? `原书第 ${row.page} 页`
+        : row.kind === 'side'
+          ? `原书第 ${row.page} 页 · ${row.title}`
+          : row.title;
+    const caption = `${row.outputPage} / ${plan.length}  ·  ${label}${row.fallback ? '（已转附页）' : ''}`;
     if (node.caption.textContent !== caption) node.caption.textContent = caption;
     if (node === cursor) cursor = cursor.nextElementSibling;
     else pages.insertBefore(node, cursor);
@@ -415,22 +473,31 @@ function go(number) {
   const row = plan[Math.max(0, Math.min(plan.length - 1, number - 1))];
   if (row) {
     nodes.get(row.key).scrollIntoView({ block: 'start' });
-    $('page').value = row.outputPage;
+    focusPage(row);
     queueVisible();
   }
 }
+function focusPage(row) {
+  // A short/wide target can share the viewport with a much taller neighbour.
+  // Keep an explicit jump selected until the user actually scrolls vertically.
+  navigationFocus = { key: row.key, top: viewer.scrollTop };
+  $('page').value = row.outputPage;
+}
 function position(p) {
-  const number = notesToOutput.get(p.page);
-  if (!number) {
+  const target = notesToOutput.get(p.page);
+  if (!target) {
     anchorPending = p;
     return;
   }
-  const row = plan[number - 1],
+  const { row, part } = target,
     node = nodes.get(row.key);
-  const y = node.top + 23 + p.y * scale;
+  const y = node.top + 23 + (part.y + p.y) * node.scale;
   if (y < viewer.scrollTop + 40 || y > viewer.scrollTop + viewer.clientHeight - 50)
     viewer.scrollTop = y - viewer.clientHeight * 0.35;
-  $('page').value = number;
+  const x = node.offsetLeft + (part.x + p.x) * node.scale;
+  if (x < viewer.scrollLeft + 20 || x > viewer.scrollLeft + viewer.clientWidth - 30)
+    viewer.scrollLeft = Math.max(0, x - viewer.clientWidth * 0.6);
+  focusPage(row);
   queueVisible();
   report();
 }
@@ -445,7 +512,7 @@ function changeZoom(next) {
     const node = nodes.get(key);
     node.token++;
     tasks.get(key)?.cancel();
-    node.textLayer?.cancel();
+    for (const layer of node.textLayers || []) layer.cancel();
   }
   layout();
   restore(anchor);
@@ -460,13 +527,17 @@ $('page').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') go(Number($('page').value));
 });
 $('zoom').onchange = () => changeZoom($('zoom').value);
+function currentScale() {
+  const row = plan[Number($('page').value) - 1];
+  return nodes.get(row?.key)?.scale ?? scale;
+}
 $('zoom-in').onclick = () => {
-  const next = Math.min(3, (scale / (96 / 72)) * 1.15);
+  const next = Math.min(3, (currentScale() / (96 / 72)) * 1.15);
   changeZoom(next);
   $('zoom').value = '';
 };
 $('zoom-out').onclick = () => {
-  const next = Math.max(0.4, scale / (96 / 72) / 1.15);
+  const next = Math.max(0.4, currentScale() / (96 / 72) / 1.15);
   changeZoom(next);
   $('zoom').value = '';
 };
@@ -495,6 +566,12 @@ viewer.addEventListener(
           best = node.row;
         }
       }
+      const focused =
+        navigationFocus && Math.abs(viewer.scrollTop - navigationFocus.top) < 0.5
+          ? nodes.get(navigationFocus.key)?.row
+          : null;
+      if (focused) best = focused;
+      else navigationFocus = null;
       if (best) $('page').value = best.outputPage;
       queueVisible();
       evict();
@@ -504,16 +581,17 @@ viewer.addEventListener(
 );
 viewer.addEventListener('click', (e) => {
   if (!e.ctrlKey && !e.metaKey) return;
-  const paper = e.target.closest('.paper'),
-    node = paper?.closest('.sheet');
-  if (!node || node.row.kind !== 'note') return;
-  const r = paper.getBoundingClientRect();
+  const partNode = e.target.closest('.page-part'),
+    node = partNode?.closest('.sheet');
+  if (!node || partNode.pagePart.kind !== 'note') return;
+  const r = partNode.getBoundingClientRect(),
+    part = partNode.pagePart;
   e.preventDefault();
   host.postMessage({
     type: 'inverse',
-    page: node.row.page,
-    x: ((e.clientX - r.left) / r.width) * node.row.width,
-    y: ((e.clientY - r.top) / r.height) * node.row.height,
+    page: part.page,
+    x: ((e.clientX - r.left) / r.width) * part.width,
+    y: ((e.clientY - r.top) / r.height) * part.height,
   });
 });
 let resizeTimer;

@@ -534,3 +534,212 @@ test('closing the compiler during export rejects pending work without a broken-p
   f.compiler.update(f.entry, f.main);
   f.compiler.dispose();
 });
+
+test('a right note replaces one source page and retains mixed bookmark and inserted notes', async (t) => {
+  const f = await fixture(t);
+  const source = `#import "${PACKAGE_IMPORT}": *
+#show: notebook.with(pdf: "book.pdf", size: (300pt, 450pt))
+#note("Exercises", placement: "right", title: "Side answer")
+
+SIDE ANSWER TARGET. $a+b=b+a$.
+
+#note(1)
+
+REGULAR ANSWER.
+`;
+  f.compiler.update(f.entry, source);
+  const r = await compile(f);
+  assert.deepEqual(
+    r.plan.rows.map((x) => x.kind),
+    ['source', 'note', 'side', 'source'],
+  );
+  const row = r.plan.rows[2];
+  assert.equal(row.width, 600);
+  assert.equal(row.height, 450);
+  assert.deepEqual(
+    row.parts.map((p) => [p.kind, p.page, p.x]),
+    [
+      ['source', 2, 0],
+      ['note', 1, 300],
+    ],
+  );
+  assert.equal(r.plan.sourceToOutput[2], 3);
+  assert.equal(r.plan.notesToOutput[1], 3);
+  assert.equal(r.plan.outline.find((x) => x.title === 'Side answer').outputPage, 3);
+  const line = source.split('\n').findIndex((x) => x.startsWith('SIDE ANSWER'));
+  await f.compiler.forward(f.entry, line, 8);
+  await wait(() => f.positions.length);
+  const point = f.positions.at(-1);
+  assert.equal(point.page, 1);
+  f.compiler.inverse(point.page, point.x + 5, point.y - 3);
+  await wait(() => f.sources.length);
+  assert.equal(f.sources.at(-1).selection.start.line, line);
+});
+
+test('an overflowing right note becomes full-size inserted pages and returns to the side after shrinking', async (t) => {
+  const f = await fixture(t);
+  const header = `#import "${PACKAGE_IMPORT}": *\n#show: notebook.with(pdf: "book.pdf", size: (300pt, 450pt))\n#note(1, placement: "right")\n`;
+  f.compiler.update(f.entry, header + '\n#lorem(1000)\n');
+  const long = await compile(f);
+  assert.ok(long.notes.getPageCount() > 1);
+  assert.equal(long.plan.blocks[0].placement, 'after');
+  assert.equal(long.plan.blocks[0].fallback, 'overflow');
+  assert.equal(long.plan.rows[0].kind, 'source');
+  assert.equal(long.plan.rows.length, f.book.pageCount + long.notes.getPageCount());
+  assert.ok(
+    long.plan.rows
+      .filter((x) => x.kind === 'note')
+      .every((x) => x.width === 300 && x.height === 450),
+  );
+  const output = await loadBook(await exportNotebook(f.book, long.notes, long.plan));
+  assert.equal(output.pageCount, long.plan.rows.length);
+  f.compiler.update(f.entry, header + '\nSHORT SIDE ANSWER\n');
+  const short = await compile(f);
+  assert.equal(short.plan.rows.length, f.book.pageCount);
+  assert.equal(short.plan.rows[0].kind, 'side');
+  assert.equal(short.plan.blocks[0].fallback, undefined);
+  assert.equal(fs.readFileSync(f.entry, 'utf8'), f.main);
+});
+
+test('side-page export preserves selectable original and note text, outlines and both sets of links', async (t) => {
+  const f = await fixture(t);
+  f.compiler.update(
+    f.entry,
+    `#import "${PACKAGE_IMPORT}": *
+#show: notebook.with(pdf: "book.pdf", size: (300pt, 450pt))
+#note(1, placement: "right", title: "Right answer")
+
+RIGHT SELECTABLE ANSWER.
+
+#source-ref(3)[RETURN TO ORIGINAL]
+
+#note(2)
+
+REGULAR SELECTABLE ANSWER.
+`,
+  );
+  const r = await compile(f),
+    bytes = await exportNotebook(f.book, r.notes, r.plan);
+  const out = await loadBook(bytes);
+  assert.equal(out.pageCount, 4);
+  assert.equal(out.doc.getPage(0).getWidth(), 600);
+  assert.equal(out.items.find((x) => x.title === 'Chapter').page, 1);
+  assert.equal(out.items.find((x) => x.title === 'Right answer').page, 1);
+  const annotations = out.doc.getPage(0).node.lookup(PDFName.of('Annots'), PDFArray);
+  assert.equal(annotations.size(), 2);
+  const original = annotations.lookup(0, PDFDict),
+    right = annotations.lookup(1, PDFDict);
+  assert.equal(out.destination(original.get(PDFName.of('Dest'))), 4);
+  assert.equal(out.destination(right.get(PDFName.of('Dest'))), 4);
+  assert.ok(right.lookup(PDFName.of('Rect'), PDFArray).get(0).asNumber() >= 300);
+  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const pdf = await getDocument({ data: new Uint8Array(bytes), verbosity: 0 }).promise;
+  try {
+    const page = await pdf.getPage(1),
+      text = (await page.getTextContent()).items;
+    assert.match(text.map((x) => x.str).join(''), /SOURCE ONE/);
+    assert.match(text.map((x) => x.str).join(''), /RIGHT SELECTABLE ANSWER/);
+    assert.ok(text.find((x) => x.str.includes('RIGHT SELECTABLE')).transform[4] >= 300);
+    assert.equal((await page.getAnnotations()).length, 2);
+  } finally {
+    await pdf.loadingTask.destroy();
+  }
+});
+
+test('side-page export normalizes crop offsets and every quarter-turn without moving original text or links', async (t) => {
+  const f = await fixture(t),
+    bookBytes = f.book.bytes;
+  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  for (const rotation of [0, 90, 180, 270]) {
+    const source = await PDFDocument.load(bookBytes),
+      page = source.getPage(0);
+    page.setCropBox(20, 30, 240, 400);
+    page.setRotation(degrees(rotation));
+    page.node
+      .lookup(PDFName.of('Annots'), PDFArray)
+      .lookup(0, PDFDict)
+      .set(PDFName.of('Rect'), source.context.obj([40, 100, 120, 120]));
+    f.book = await loadBook(await source.save());
+    const size = f.book.sizes[0];
+    f.compiler.update(
+      f.entry,
+      `#import "${PACKAGE_IMPORT}": *
+#show: notebook.with(pdf: "book.pdf", size: (${size.width}pt, ${size.height}pt), config: (margin: 20pt))
+#note(1, placement: "right", chrome: false)
+ROTATION SIDE NOTE.
+`,
+    );
+    const r = await compile(f);
+    assert.equal(r.plan.rows[0].kind, 'side', `rotation ${rotation}`);
+    const bytes = await exportNotebook(f.book, r.notes, r.plan),
+      out = await loadBook(bytes);
+    assert.equal(out.doc.getPage(0).getRotation().angle, 0);
+    assert.equal(out.doc.getPage(0).getWidth(), size.width * 2);
+    assert.equal(out.doc.getPage(0).getHeight(), size.height);
+    const before = await getDocument({ data: new Uint8Array(f.book.bytes), verbosity: 0 }).promise;
+    const after = await getDocument({ data: new Uint8Array(bytes), verbosity: 0 }).promise;
+    try {
+      const originalPage = await before.getPage(1),
+        outputPage = await after.getPage(1);
+      const originalText = (await originalPage.getTextContent()).items.find((x) =>
+        x.str.includes('SOURCE ONE'),
+      );
+      const outputText = (await outputPage.getTextContent()).items.find((x) =>
+        x.str.includes('SOURCE ONE'),
+      );
+      const oldPoint = originalPage
+        .getViewport({ scale: 1 })
+        .convertToViewportPoint(originalText.transform[4], originalText.transform[5]);
+      const newPoint = outputPage
+        .getViewport({ scale: 1 })
+        .convertToViewportPoint(outputText.transform[4], outputText.transform[5]);
+      assert.ok(Math.abs(oldPoint[0] - newPoint[0]) < 0.02, `text x at ${rotation}`);
+      assert.ok(Math.abs(oldPoint[1] - newPoint[1]) < 0.02, `text y at ${rotation}`);
+      const originalLink = (await originalPage.getAnnotations())[0];
+      const outputLink = (await outputPage.getAnnotations())[0];
+      const rect = (p, r) => {
+        const viewport = p.getViewport({ scale: 1 });
+        const a = viewport.convertToViewportPoint(r[0], r[1]),
+          b = viewport.convertToViewportPoint(r[2], r[3]);
+        return [
+          Math.min(a[0], b[0]),
+          Math.min(a[1], b[1]),
+          Math.max(a[0], b[0]),
+          Math.max(a[1], b[1]),
+        ];
+      };
+      const oldRect = rect(originalPage, originalLink.rect),
+        newRect = rect(outputPage, outputLink.rect);
+      assert.ok(
+        oldRect.every((v, i) => Math.abs(v - newRect[i]) < 0.02),
+        `link at ${rotation}`,
+      );
+    } finally {
+      await before.loadingTask.destroy();
+      await after.loadingTask.destroy();
+    }
+  }
+});
+
+test('ambiguous side columns and a shorter source page fall back to regular inserts', async (t) => {
+  const f = await fixture(t);
+  f.compiler.update(
+    f.entry,
+    `#import "${PACKAGE_IMPORT}": *
+#show: notebook.with(pdf: "book.pdf", size: (300pt, 450pt))
+#note(1, placement: "right")[FIRST SIDE]
+#note(1, placement: "right")[SECOND SIDE]
+`,
+  );
+  const r = await compile(f);
+  assert.equal(r.plan.rows.length, 5);
+  assert.ok(r.plan.blocks.every((x) => x.fallback === 'multiple' && x.placement === 'after'));
+  const invalid = r.metadata.map((x) => (x.kind === 'pdf-note' ? { ...x, placement: 'left' } : x));
+  assert.throws(() => planNotebook(f.book, r.notes, invalid), /未知笔记位置/);
+  f.book.sizes[0].height = 300;
+  const single = r.metadata.filter((x) => x.kind !== 'pdf-note' || x.id === r.plan.blocks[0].id);
+  const only = await PDFDocument.create();
+  only.addPage([300, 450]);
+  const fallback = planNotebook(f.book, only, single);
+  assert.equal(fallback.blocks[0].fallback, 'height');
+});

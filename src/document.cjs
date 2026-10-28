@@ -6,6 +6,7 @@ const {
   PDFRef,
   PDFString,
   PDFHexString,
+  degrees,
 } = require('pdf-lib');
 
 function object(doc, value) {
@@ -75,6 +76,16 @@ function readBookmarks(doc) {
   return { items: result, destination };
 }
 
+function visibleBox(page) {
+  const media = page.getMediaBox(),
+    crop = page.getCropBox();
+  const x = Math.max(media.x, crop.x),
+    y = Math.max(media.y, crop.y);
+  const width = Math.min(media.x + media.width, crop.x + crop.width) - x;
+  const height = Math.min(media.y + media.height, crop.y + crop.height) - y;
+  return width > 0 && height > 0 ? { x, y, width, height } : media;
+}
+
 async function loadBook(bytes) {
   const doc = await PDFDocument.load(bytes, { updateMetadata: false });
   return {
@@ -84,9 +95,10 @@ async function loadBook(bytes) {
     sizes: doc.getPages().map((p) => {
       const rotation = p.getRotation().angle;
       const swap = Math.abs(rotation) % 180 === 90;
+      const box = visibleBox(p);
       return {
-        width: swap ? p.getHeight() : p.getWidth(),
-        height: swap ? p.getWidth() : p.getHeight(),
+        width: swap ? box.height : box.width,
+        height: swap ? box.width : box.height,
         rotation,
       };
     }),
@@ -126,7 +138,16 @@ function planNotebook(book, notes, metadata) {
     const end = i + 1 < starts.length ? starts[i + 1].page - 1 : notes.getPageCount();
     if (!Number.isInteger(n.page) || n.page < 1 || n.page > end || end > notes.getPageCount())
       throw Error(`笔记分页元数据无效：${n.id}`);
-    return { ...n, after: resolve(n.after), first: n.page, last: end };
+    const placement = n.placement ?? 'after';
+    if (!['after', 'right'].includes(placement)) throw Error(`未知笔记位置：${placement}`);
+    return {
+      ...n,
+      placement,
+      requestedPlacement: placement,
+      after: resolve(n.after),
+      first: n.page,
+      last: end,
+    };
   });
   const grouped = new Map();
   for (const n of blocks) {
@@ -138,12 +159,49 @@ function planNotebook(book, notes, metadata) {
     notesToOutput = {};
   function push(row) {
     row.outputPage = rows.length + 1;
+    row.parts ??= [
+      { kind: row.kind, page: row.page, x: 0, y: 0, width: row.width, height: row.height },
+    ];
     rows.push(row);
   }
   for (let p = 1; p <= book.pageCount; p++) {
+    const attached = grouped.get(p) || [],
+      size = book.sizes[p - 1];
+    const candidates = attached.filter((n) => n.placement === 'right');
+    let side;
+    for (const n of candidates) {
+      if (candidates.length > 1) n.fallback = 'multiple';
+      else if (n.first !== n.last) n.fallback = 'overflow';
+      else if (notes.getPage(n.first - 1).getHeight() > size.height + 0.01) n.fallback = 'height';
+      if (n.fallback) n.placement = 'after';
+      else side = n;
+    }
     sourceToOutput[p] = rows.length + 1;
-    push({ kind: 'source', key: `source:${p}`, page: p, ...book.sizes[p - 1], title: `原书 ${p}` });
-    for (const n of grouped.get(p) || [])
+    if (side) {
+      const note = notes.getPage(side.first - 1);
+      notesToOutput[side.first] = rows.length + 1;
+      push({
+        kind: 'side',
+        key: `side:${p}:${side.id}`,
+        page: p,
+        title: side.title,
+        width: size.width + note.getWidth(),
+        height: size.height,
+        parts: [
+          { kind: 'source', page: p, x: 0, y: 0, width: size.width, height: size.height },
+          {
+            kind: 'note',
+            page: side.first,
+            x: size.width,
+            y: 0,
+            width: note.getWidth(),
+            height: note.getHeight(),
+            noteId: side.id,
+          },
+        ],
+      });
+    } else push({ kind: 'source', key: `source:${p}`, page: p, ...size, title: `原书 ${p}` });
+    for (const n of attached.filter((n) => n !== side))
       for (let k = n.first; k <= n.last; k++) {
         const page = notes.getPage(k - 1);
         notesToOutput[k] = rows.length + 1;
@@ -152,6 +210,7 @@ function planNotebook(book, notes, metadata) {
           key: `note:${n.id}:${k - n.first + 1}`,
           page: k,
           noteId: n.id,
+          fallback: n.fallback,
           title: n.title,
           width: page.getWidth(),
           height: page.getHeight(),
@@ -265,12 +324,92 @@ function rewriteLinks(source, copies, output, destination, toOutput, sourceToOut
   }
 }
 
+function transformAnnotations(page, matrix) {
+  const annotations = page.node.lookupMaybe(PDFName.of('Annots'), PDFArray);
+  if (!annotations) return;
+  const [a, b, c, d, e, f] = matrix;
+  const point = (x, y) => [a * x + c * y + e, b * x + d * y + f];
+  for (const ref of annotations.asArray()) {
+    const annotation = object(page.doc, ref);
+    if (!(annotation instanceof PDFDict)) continue;
+    const rect = annotation.lookupMaybe(PDFName.of('Rect'), PDFArray);
+    if (rect?.size() === 4) {
+      const [x0, y0, x1, y1] = rect.asArray().map((n) => n.asNumber());
+      const corners = [point(x0, y0), point(x1, y0), point(x0, y1), point(x1, y1)];
+      annotation.set(
+        PDFName.of('Rect'),
+        page.doc.context.obj([
+          Math.min(...corners.map((p) => p[0])),
+          Math.min(...corners.map((p) => p[1])),
+          Math.max(...corners.map((p) => p[0])),
+          Math.max(...corners.map((p) => p[1])),
+        ]),
+      );
+    }
+    const quad = annotation.lookupMaybe(PDFName.of('QuadPoints'), PDFArray);
+    if (quad && quad.size() % 2 === 0) {
+      const values = quad.asArray().map((n) => n.asNumber()),
+        transformed = [];
+      for (let i = 0; i < values.length; i += 2)
+        transformed.push(...point(values[i], values[i + 1]));
+      annotation.set(PDFName.of('QuadPoints'), page.doc.context.obj(transformed));
+    }
+  }
+}
+
+function widenSource(page, row) {
+  const box = visibleBox(page),
+    source = row.parts[0];
+  const rotation = ((page.getRotation().angle % 360) + 360) % 360;
+  const { x, y, width: w, height: h } = box;
+  const matrices = {
+    0: [1, 0, 0, 1, -x, -y],
+    90: [0, -1, 1, 0, -y, w + x],
+    180: [-1, 0, 0, -1, w + x, h + y],
+    270: [0, 1, -1, 0, h + y, -x],
+  };
+  const matrix = matrices[rotation];
+  if (!matrix) throw Error(`原页旋转角度不受支持：${rotation}`);
+  matrix[5] += row.height - source.height;
+  const context = page.doc.context;
+  // Retain the original streams/resources and clip before widening the crop box.
+  // Normalizing /Rotate makes the added column stay on the visible right side.
+  page.node.normalize();
+  page.node.wrapContentStreams(
+    context.register(
+      context.flateStream(
+        `q\n0 ${row.height - source.height} ${source.width} ${source.height} re W n\n${matrix.join(' ')} cm\n`,
+      ),
+    ),
+    context.register(context.flateStream('Q\n')),
+  );
+  transformAnnotations(page, matrix);
+  page.setRotation(degrees(0));
+  page.setMediaBox(0, 0, row.width, row.height);
+  page.setCropBox(0, 0, row.width, row.height);
+}
+
 async function exportNotebook(book, notes, plan) {
   const result = await PDFDocument.create();
   const source = await result.copyPages(book.doc, book.doc.getPageIndices());
   const inserts = plan.blocks.length ? await result.copyPages(notes, notes.getPageIndices()) : [];
-  for (const row of plan.rows)
-    result.addPage((row.kind === 'source' ? source : inserts)[row.page - 1]);
+  for (const row of plan.rows) {
+    if (row.kind !== 'side') {
+      result.addPage((row.kind === 'source' ? source : inserts)[row.page - 1]);
+      continue;
+    }
+    const page = source[row.page - 1];
+    result.addPage(page);
+    widenSource(page, row);
+    const part = row.parts[1],
+      note = inserts[part.page - 1];
+    const embedded = await result.embedPage(note);
+    page.drawPage(embedded, { x: part.x, y: row.height - part.y - part.height });
+    const dy = row.height - part.y - part.height;
+    transformAnnotations(note, [1, 0, 0, 1, part.x, dy]);
+    const annotations = note.node.lookupMaybe(PDFName.of('Annots'), PDFArray);
+    if (annotations) for (const ref of annotations.asArray()) page.node.addAnnot(ref);
+  }
   result.setTitle(plan.config.title || 'PDF 阅读笔记');
   result.setCreator('Typst PDF Notebook');
   rewriteLinks(book.doc, source, result, book.destination, plan.sourceToOutput);

@@ -1,4 +1,4 @@
-#import "@local/typst-pdf-notebook:0.3.1": *
+#import "@local/typst-pdf-notebook:0.3.2": *
 #show: notebook.with(
   pdf: "book.pdf",
   title: "线性代数 · 解答与思考",

@@ -99,8 +99,9 @@
       note-items(n.body).filter(item => not note-whitespace(item)).len() > 0)
     let ids = ()
     for (index, raw) in entries.enumerate() {
-      let item = (title: none, style: "blank", chrome: true, id: none,
+      let item = (title: none, style: "blank", chrome: true, id: none, placement: "after",
         ..note-settings.at(str(raw.after), default: (:)), ..raw)
+      assert(("after", "right").contains(item.placement), message: "placement 只支持 after 或 right。")
       let id = if item.id == none { "note-" + str(index + 1) } else { item.id }
       assert(not ids.contains(id), message: "笔记 id 重复：" + id)
       ids.push(id)
@@ -108,11 +109,12 @@
       let start-label = label("pdf-note-" + id)
       let (width, height) = size
       math-theme.page-frame(width: width, height: height, title: title, config: theme,
-        source: "原 PDF · " + str(item.after) + " 之后", style: item.style, chrome: item.chrome,
+        source: "原 PDF · " + str(item.after) + if item.placement == "right" { "" } else { " 之后" },
+        style: item.style, chrome: item.chrome,
         page-number: current => current - query(start-label).first().location().page() + 1,
       )[
         #context metadata((kind: "pdf-note", id: id, after: item.after,
-          title: title, page: here().page()))
+          title: title, placement: item.placement, page: here().page()))
         #start-label
         #invisible-heading(title, 1)
         // Each note owns its numbering. Keep the physical page counter intact

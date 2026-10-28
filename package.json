@@ -2,7 +2,7 @@
   "name": "typst-pdf-notebook",
   "displayName": "Typst PDF Notebook",
   "description": "原书按需阅读、Typst 笔记双向定位，导出时插页。",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "publisher": "ArcBC",
   "icon": "media/icon.png",
   "homepage": "https://github.com/ArchiBC/typst-pdf-notebook#readme",

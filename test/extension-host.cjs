@@ -63,7 +63,7 @@ async function run() {
   const api = await extension.activate();
   const starter = await vscode.workspace.openTextDocument(initialized);
   const starterText = starter.getText();
-  assert.match(starterText, /@local\/typst-pdf-notebook:0\.3\.1/);
+  assert.match(starterText, /@local\/typst-pdf-notebook:0\.3\.2/);
   assert.match(starterText, /size: \(498\.9pt, 708\.66pt\)/);
   assert.match(starterText, /pdf: "练习册.PDF"/);
   assert.equal(starterText.includes('template.typ'), false);
@@ -136,7 +136,7 @@ async function run() {
   await replace(oldDoc, oldSource + '\nUNSAVED USER TEXT');
   await vscode.window.showTextDocument(oldDoc, { viewColumn: vscode.ViewColumn.One });
   assert.equal(await vscode.commands.executeCommand('pdfNotebook.useChengsi'), true);
-  assert.ok(oldDoc.getText().startsWith('#import "@local/typst-pdf-notebook:0.3.1": *'));
+  assert.ok(oldDoc.getText().startsWith('#import "@local/typst-pdf-notebook:0.3.2": *'));
   assert.ok(oldDoc.getText().endsWith('OLD NOTE BODY\n\nUNSAVED USER TEXT'));
   assert.equal(fs.readFileSync(oldEntry, 'utf8'), oldSource);
   assert.equal(oldDoc.isDirty, true);
@@ -340,6 +340,102 @@ async function run() {
     bytes: fs.statSync(exported).size,
     pages: session.snapshot.plan.rows.length,
   };
+  // A virtual right column must use the same source map as an inserted note.
+  const sideMain = original.replace('#note("习题1A")', '#note("习题1A", placement: "right")');
+  const sideRevision = session.snapshot.revision;
+  await replace(main, sideMain);
+  await wait(
+    () =>
+      session.snapshot.revision > sideRevision &&
+      session.snapshot.plan.rows.some((x) => x.kind === 'side'),
+    'right column appears',
+  );
+  const sideRow = session.snapshot.plan.rows.find((x) => x.kind === 'side');
+  assert.equal(sideRow.page, 23);
+  assert.equal(session.snapshot.plan.rows.length, 342);
+  assert.ok(Math.abs(sideRow.width - 997.8) < 0.01);
+  const sideEditor = await vscode.window.showTextDocument(answer, {
+    viewColumn: vscode.ViewColumn.One,
+  });
+  sideEditor.selection = new vscode.Selection(2, 8, 2, 8);
+  const sidePosition = session.positionEvents.at(-1);
+  await session.forward(sideEditor);
+  try {
+    await wait(
+      () =>
+        session.positionEvents.at(-1) !== sidePosition &&
+        session.viewerDiagnostics?.currentOutputPage === 23,
+      'forward mapping to right column',
+    );
+  } catch (error) {
+    fs.writeFileSync(
+      path.join(root, 'side-forward-failure.json'),
+      JSON.stringify(
+        {
+          positions: session.positionEvents,
+          sameEvent: session.positionEvents.at(-1) === sidePosition,
+          diagnostics: session.viewerDiagnostics,
+          expected: sideRow,
+          lastCursor: session.lastCursor,
+          viewerError: session.viewerError,
+          sourceSelection: sideEditor.selection,
+          revision: session.revision,
+          snapshotRevision: session.snapshot.revision,
+        },
+        null,
+        2,
+      ),
+    );
+    throw error;
+  }
+  const sidePoint = session.positionEvents.at(-1),
+    sideSource = session.sourceEvents.at(-1);
+  session.compiler.inverse(sidePoint.page, sidePoint.x + 5, sidePoint.y - 3);
+  await wait(() => session.sourceEvents.at(-1) !== sideSource, 'inverse mapping from right column');
+  assert.ok(decodeURI(session.sourceEvents.at(-1).uri).endsWith('/notes/answers-1a.typ'));
+  assert.equal(session.sourceEvents.at(-1).selection.start.line, 2);
+  const sideExport = await session.export(path.join(root, 'side-result.pdf'));
+  const { PDFDocument } = require('pdf-lib');
+  const sidePdf = await PDFDocument.load(fs.readFileSync(sideExport));
+  assert.equal(sidePdf.getPageCount(), 342);
+  assert.ok(Math.abs(sidePdf.getPage(22).getWidth() - 997.8) < 0.01);
+  const sideBody = answer.getText(),
+    overflowRevision = session.snapshot.revision;
+  await replace(answer, sideBody + '\n#lorem(1200)\n');
+  await wait(
+    () =>
+      session.snapshot.revision > overflowRevision &&
+      session.snapshot.plan.blocks[0].fallback === 'overflow',
+    'right column becomes regular inserts',
+  );
+  assert.equal(
+    session.snapshot.plan.rows.some((x) => x.kind === 'side'),
+    false,
+  );
+  const fallbackPages = session.snapshot.plan.rows.length;
+  const shrinkRevision = session.snapshot.revision;
+  await replace(answer, sideBody);
+  await wait(
+    () =>
+      session.snapshot.revision > shrinkRevision &&
+      session.snapshot.plan.rows.some((x) => x.kind === 'side'),
+    'shortened note returns to the right',
+  );
+  evidence.sideNote = {
+    sourcePage: 23,
+    outputPages: sidePdf.getPageCount(),
+    width: sidePdf.getPage(22).getWidth(),
+    forwardOutputPage: 23,
+    inverseLine: 2,
+    fallbackPages,
+    recovered: true,
+  };
+  const restoreRevision = session.snapshot.revision;
+  await replace(main, original);
+  await wait(
+    () => session.snapshot.revision > restoreRevision && session.snapshot.plan.rows.length === 343,
+    'restore standard inserts',
+  );
   assert.equal(
     fs.readFileSync(path.join(root, 'main.typ'), 'utf8'),
     original,
