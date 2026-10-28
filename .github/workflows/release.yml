@@ -1,0 +1,123 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build and test only; do not publish'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      dry_run: ${{ steps.plan.outputs.dry_run }}
+      marketplace: ${{ steps.plan.outputs.marketplace }}
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - id: plan
+        run: node scripts/release.cjs plan
+        env:
+          RELEASE_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+          MARKETPLACE_TRUSTED_PUBLISHING: ${{ vars.MARKETPLACE_TRUSTED_PUBLISHING }}
+
+  verify:
+    needs: plan
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  artifact:
+    needs: [plan, verify]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v8
+        with:
+          name: notebook-vsix
+          path: output
+      - run: node scripts/release.cjs verify
+        env:
+          RELEASE_DRY_RUN: ${{ needs.plan.outputs.dry_run }}
+          MARKETPLACE_TRUSTED_PUBLISHING: ${{ needs.plan.outputs.marketplace }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-verified
+          path: |
+            output/*.vsix
+            output/*.sha256
+            output/release-verification.json
+          if-no-files-found: error
+
+  marketplace:
+    needs: [plan, artifact]
+    if: needs.plan.outputs.dry_run == 'false' && needs.plan.outputs.marketplace == 'true'
+    runs-on: ubuntu-latest
+    environment: marketplace
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-verified
+          path: output
+      - run: node scripts/release.cjs marketplace
+        env:
+          RELEASE_DRY_RUN: 'false'
+          MARKETPLACE_TRUSTED_PUBLISHING: 'true'
+
+  github:
+    needs: [plan, artifact, marketplace]
+    if: >-
+      always() && needs.plan.outputs.dry_run == 'false' &&
+      needs.artifact.result == 'success' &&
+      (needs.marketplace.result == 'success' || needs.marketplace.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-verified
+          path: output
+      - run: node scripts/release.cjs github
+        env:
+          RELEASE_DRY_RUN: 'false'
+          MARKETPLACE_TRUSTED_PUBLISHING: ${{ needs.plan.outputs.marketplace }}
+          GH_TOKEN: ${{ github.token }}

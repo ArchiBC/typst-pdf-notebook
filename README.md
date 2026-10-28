@@ -172,6 +172,39 @@ code --install-extension .\output\typst-pdf-notebook-0.3.3.vsix --force
 
 GitHub Actions 在每次 push / pull request 时打包一次，由 Windows、macOS、Linux 三个平台安装同一个 VSIX，并运行原生排版测试和真实 VS Code 宿主测试；Linux 宿主使用 Xvfb。失败日志和测试证据会保存为工作流附件。工作流仅构建和验证。
 
+## 自动发版
+
+`.github/workflows/release.yml` 在推送 `vX.Y.Z` 标签后自动运行：校对标签和清单版本、复用三平台 CI、校验安装包身份和 SHA-256，然后将同一份 VSIX 和校验文件发布为 GitHub Release。标签必须指向 `main` 历史中的提交，版本必须同时匹配 `package.json` 和 `package-lock.json`。历史版本不会覆盖较新版本的 Latest 标记，已有不同内容的附件不会被覆盖。
+
+Marketplace 使用 GitHub OIDC 可信发布，不使用 Azure、PAT 或仓库发布密钥。市场自动上传默认关闭：仓库变量 `MARKETPLACE_TRUSTED_PUBLISHING=false` 时，标签仍会发布 GitHub 安装包，Release 说明会明确标注市场自动上传未启用。设为 `true` 后，市场发布必须成功，才会公开对应的 GitHub Release；OIDC 失败不会切换到其他凭据。
+
+启用市场自动上传前，需要发布者 Owner 在 [Marketplace 后台](https://marketplace.visualstudio.com/manage/publishers/ArcBC) 的 **Trusted Publishing** 页面创建策略：
+
+| 字段             | 值                           |
+| ---------------- | ---------------------------- |
+| Policy name      | `typst-pdf-notebook-release` |
+| Repository owner | `ArchiBC`                    |
+| Repository       | `typst-pdf-notebook`         |
+| Workflow         | `release.yml`                |
+| Environment      | `marketplace`                |
+
+GitHub 的 `marketplace` 环境只允许 `v*` 标签部署。策略建立后，在 [Actions 变量设置](https://github.com/ArchiBC/typst-pdf-notebook/settings/variables/actions) 将 `MARKETPLACE_TRUSTED_PUBLISHING` 改为 `true`。如果 Marketplace 尚未显示 Trusted Publishing 入口，保持 `false`，继续使用 GitHub VSIX 或手动上传市场。该能力的后台开放情况以 [官方跟踪](https://github.com/microsoft/vscode-vsce/issues/1275) 为准。发布工具固定为采用最终 OIDC 交换协议的 `@vscode/vsce@4.0.1-1`。
+
+日常发版示例（先在 CHANGELOG 中补齐新版本说明）：
+
+```powershell
+npm version patch --no-git-tag-version
+git add package.json package-lock.json CHANGELOG.md
+git commit -m "Release 0.3.4"
+git tag v0.3.4
+git push origin main
+git push origin v0.3.4
+```
+
+安装包文件名自动读取版本，无需同步修改打包命令。不要移动已发布的标签，也不要使用已发布过的版本号重新发包。中途失败时优先在 Actions 中 **Re-run failed jobs**，复用已经测试的安装包；若重新打包导致附件哈希不同，流程会拒绝覆盖现有 Release。
+
+可在 Actions → **Release** → **Run workflow** 中选择 `main` 并保留默认的 `dry_run=true`，完成全部打包、三平台测试与安装包校验，不上传市场、不创建 GitHub Release。手动正式发版需选择与清单版本一致的标签，再取消 `dry_run`。
+
 从 Windows 运行 `node test/run-wsl.cjs 发行版名称`，可把同一 VSIX 和源码复制到 WSL 自身文件系统中的独立测试目录。WSL 需有 Node.js 24、Xvfb 和 VS Code 所需系统库；`scripts/setup-wsl-test.sh` 提供 Ubuntu 测试环境准备脚本。结果回传到 `output/wsl/`。
 
 ```powershell
