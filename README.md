@@ -219,7 +219,9 @@ Marketplace 使用 GitHub OIDC 可信发布，不使用 Azure、PAT 或仓库发
 | Workflow         | `release.yml`                |
 | Environment      | `marketplace`                |
 
-GitHub 的 `marketplace` 环境只允许 `v*` 标签部署。策略建立后，在 [Actions 变量设置](https://github.com/ArchiBC/typst-pdf-notebook/settings/variables/actions) 将 `MARKETPLACE_TRUSTED_PUBLISHING` 改为 `true`。如果 Marketplace 尚未显示 Trusted Publishing 入口，保持 `false`，继续使用 GitHub VSIX 或手动上传市场。该能力的后台开放情况以 [官方跟踪](https://github.com/microsoft/vscode-vsce/issues/1275) 为准。发布工具固定为采用最终 OIDC 交换协议的 `@vscode/vsce@4.0.1-1`。
+Marketplace 已于 2026-10-28 [正式开放 GitHub Trusted Publishing](https://developer.microsoft.com/blog/trusted-publishing-visual-studio-marketplace/)，配置步骤见 [官方发布文档](https://code.visualstudio.com/api/working-with-extensions/publishing-extension#publish-with-github-actions-and-trusted-publishing)。发布工具固定为稳定版 `@vscode/vsce@4.1.0`。
+
+GitHub 的 `marketplace` 环境只允许 `v*` 标签部署。确认后台已创建上述策略后，在 [Actions 变量设置](https://github.com/ArchiBC/typst-pdf-notebook/settings/variables/actions) 将 `MARKETPLACE_TRUSTED_PUBLISHING` 改为 `true`；策略未建好前保持 `false`。下一次正常版本标签发布时验证 OIDC 交换及上传结果。手动 dry run 只验证打包与三平台 CI，不会交换发布凭据或上传市场；不需要为测试创建版本标签。
 
 日常发版示例（先在 CHANGELOG 中补齐新版本说明）：
 
