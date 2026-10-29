@@ -175,7 +175,10 @@ async function run() {
   const incompatibleDoc = await vscode.workspace.openTextDocument(incompatiblePath);
   await replace(incompatibleDoc, incompatibleSource + '\nUNSAVED COMPATIBILITY BODY');
   await vscode.window.showTextDocument(incompatibleDoc, { viewColumn: vscode.ViewColumn.One });
-  assert.equal(await vscode.commands.executeCommand('pdfNotebook.open'), incompatiblePath);
+  assert.equal(
+    await vscode.commands.executeCommand('pdfNotebook.open'),
+    incompatibleDoc.uri.fsPath,
+  );
   const failedSession = await api.getSession();
   const failedCompiler = failedSession.compiler;
   assert.match(failedSession.lastError.message, /请先写 #note/);
@@ -208,7 +211,10 @@ async function run() {
   failedSession.panel.dispose();
   await replace(incompatibleDoc, incompatibleDoc.getText() + '\n#let invalid = (');
   await vscode.window.showTextDocument(incompatibleDoc, { viewColumn: vscode.ViewColumn.One });
-  assert.equal(await vscode.commands.executeCommand('pdfNotebook.open'), incompatiblePath);
+  assert.equal(
+    await vscode.commands.executeCommand('pdfNotebook.open'),
+    incompatibleDoc.uri.fsPath,
+  );
   const syntaxSession = await api.getSession();
   assert.ok(syntaxSession.lastError);
   await wait(
