@@ -214,6 +214,22 @@ aside h2 {
   text-align: center;
   opacity: 0.7;
 }
+#problem {
+  margin: 20px;
+  padding: 18px;
+  border: 1px solid var(--vscode-errorForeground, #c12d42);
+  border-radius: 4px;
+  background: var(--background);
+  line-height: 1.6;
+}
+#problem details {
+  margin-top: 12px;
+}
+#problem pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
 footer {
   height: 28px;
   display: flex;

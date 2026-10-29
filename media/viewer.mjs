@@ -53,6 +53,17 @@ function status(text, error = false) {
   $('status').textContent = text;
   document.querySelector('footer').classList.toggle('error', error);
 }
+function showError(message) {
+  $('problem').hidden = false;
+  $('empty').hidden = true;
+  $('problem-detail').textContent = message.text;
+  $('upgrade-template').hidden = !message.canUpgradeTemplate;
+  $('problem-hint').textContent = message.canUpgradeTemplate
+    ? '当前笔记使用旧版模板。#note(..., right) 和 #sidenote(...) 需要新版模板；升级保留正文与未保存修改，并支持撤销。'
+    : '请查看错误详情并修正笔记源码，预览会自动重试。';
+  status('笔记编译失败，修正源码后自动重试。', true);
+  report();
+}
 function report() {
   document.body.dataset.renderedPages = String(rendered.size);
   host.postMessage({
@@ -66,6 +77,8 @@ function report() {
       bookPages: book?.numPages,
       currentOutputPage: Number($('page').value),
       revision: generation,
+      error: $('problem').hidden ? null : $('problem-detail').textContent,
+      templateUpgradeAvailable: !$('upgrade-template').hidden,
     },
   });
 }
@@ -443,7 +456,12 @@ async function update(message) {
   layout();
   restore(anchor);
   renderOutline();
-  status(`${plan.length} 页 · ${message.noteCount} 份笔记`);
+  if (message.error) showError(message.error);
+  else {
+    $('problem').hidden = true;
+    $('upgrade-template').hidden = true;
+    status(`${plan.length} 页 · ${message.noteCount} 份笔记`);
+  }
   queueVisible();
   report();
   // All old note render tasks have been cancelled before retiring this document.
@@ -547,6 +565,7 @@ $('toggle-outline').onclick = () => {
 };
 $('filter').oninput = renderOutline;
 $('export').onclick = () => host.postMessage({ type: 'export' });
+$('upgrade-template').onclick = () => host.postMessage({ type: 'upgrade-template' });
 viewer.addEventListener(
   'scroll',
   () => {
@@ -608,6 +627,6 @@ window.addEventListener('message', (e) => {
   if (m.type === 'document') update(m).catch((e) => status(e.message, true));
   else if (m.type === 'position') position(m);
   else if (m.type === 'status') status(m.text);
-  else if (m.type === 'error') status(m.text, true);
+  else if (m.type === 'error') showError(m);
 });
 host.postMessage({ type: 'ready' });

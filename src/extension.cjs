@@ -135,7 +135,12 @@ class NotebookSession {
     this.disposables.push(watcher);
     await this.startCompiler();
     this.starting = false;
-    await this.refresh();
+    try {
+      await this.refresh();
+    } catch {
+      // Keep the initialized session alive so a cold compilation failure can
+      // show its diagnostic and recover when the user fixes or upgrades the source.
+    }
   }
   async reconfigure() {
     if (this.disposed) return;
@@ -229,10 +234,28 @@ class NotebookSession {
   error(error) {
     if (this.disposed) return;
     this.output.appendLine(error.stack || String(error));
-    this.post({ type: 'error', text: error.message });
+    this.post(this.errorMessage(error));
+  }
+  errorMessage(error) {
+    const doc = vscode.workspace.textDocuments.find(
+      (d) => d.uri.scheme === 'file' && d.uri.fsPath === this.entry,
+    );
+    return {
+      type: 'error',
+      text: error.message,
+      canUpgradeTemplate: Boolean(doc && templateUpgradeEdits(doc.getText()).length),
+    };
   }
   publish() {
-    if (!this.snapshot || !this.panel) return;
+    if (!this.panel) return;
+    if (!this.snapshot) {
+      this.post(
+        this.lastError
+          ? this.errorMessage(this.lastError)
+          : { type: 'status', text: '正在更新笔记…' },
+      );
+      return;
+    }
     const { bytes, plan, revision } = this.snapshot;
     this.post({
       type: 'document',
@@ -244,6 +267,7 @@ class NotebookSession {
       title: plan.config.title,
       noteCount: plan.noteCount,
       revision,
+      error: this.lastError ? this.errorMessage(this.lastError) : null,
     });
   }
   async open() {
@@ -294,7 +318,15 @@ class NotebookSession {
         )
           this.compiler.inverse(msg.page, msg.x, msg.y);
         else if (msg.type === 'export') await this.export();
-        else if (msg.type === 'external' && /^https?:\/\//.test(msg.url))
+        else if (msg.type === 'upgrade-template') {
+          if (
+            await vscode.commands.executeCommand(
+              'pdfNotebook.useChengsi',
+              vscode.Uri.file(this.entry),
+            )
+          )
+            await this.refresh();
+        } else if (msg.type === 'external' && /^https?:\/\//.test(msg.url))
           await vscode.env.openExternal(vscode.Uri.parse(msg.url));
         else if (msg.type === 'diagnostics') this.viewerDiagnostics = msg.value;
         else if (msg.type === 'viewer-error') {

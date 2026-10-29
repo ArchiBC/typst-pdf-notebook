@@ -166,6 +166,66 @@ async function run() {
   assert.equal(migratedSession.snapshot.plan.config.template, 'chengsi');
   assert.equal(migratedSession.snapshot.plan.rows.length, 342);
   migratedSession.dispose();
+  // An old template interprets `right` as a standalone note body. The following
+  // text then fails before the first snapshot; the preview must remain usable.
+  const incompatiblePath = path.join(root, '旧版便签.notes.typ');
+  const incompatibleSource =
+    '#import "@local/typst-pdf-notebook:0.3.2": *\n#show: notebook.with(pdf: "book.pdf", size: (498.9pt, 708.66pt))\n#note(15, right)\n旧版便签正文\n#note(28)\n普通笔记正文\n';
+  fs.writeFileSync(incompatiblePath, incompatibleSource);
+  const incompatibleDoc = await vscode.workspace.openTextDocument(incompatiblePath);
+  await replace(incompatibleDoc, incompatibleSource + '\nUNSAVED COMPATIBILITY BODY');
+  await vscode.window.showTextDocument(incompatibleDoc, { viewColumn: vscode.ViewColumn.One });
+  assert.equal(await vscode.commands.executeCommand('pdfNotebook.open'), incompatiblePath);
+  const failedSession = await api.getSession();
+  const failedCompiler = failedSession.compiler;
+  assert.match(failedSession.lastError.message, /请先写 #note/);
+  assert.equal(failedSession.snapshot, undefined);
+  assert.equal(failedSession.disposed, false);
+  await wait(
+    () =>
+      failedSession.viewerDiagnostics?.error &&
+      failedSession.viewerDiagnostics.templateUpgradeAvailable,
+    'cold template failure shows a diagnostic and an upgrade action',
+  );
+  // The recovery action targets the notebook entry, even with an include active.
+  await vscode.window.showTextDocument(extra, { viewColumn: vscode.ViewColumn.One });
+  assert.equal(
+    await vscode.commands.executeCommand('pdfNotebook.useChengsi', incompatibleDoc.uri),
+    true,
+  );
+  await wait(
+    () =>
+      !failedSession.lastError &&
+      failedSession.viewerDiagnostics?.bookPages === 341 &&
+      failedSession.viewerDiagnostics.canvases > 0 &&
+      !failedSession.viewerDiagnostics.error,
+    'upgraded cold preview recovers without recreating the session',
+  );
+  assert.equal(failedSession.compiler, failedCompiler);
+  assert.ok(failedSession.snapshot.plan.rows.some((row) => row.kind === 'side' && row.page === 15));
+  assert.ok(incompatibleDoc.getText().endsWith('UNSAVED COMPATIBILITY BODY'));
+  assert.equal(fs.readFileSync(incompatiblePath, 'utf8'), incompatibleSource);
+  failedSession.panel.dispose();
+  await replace(incompatibleDoc, incompatibleDoc.getText() + '\n#let invalid = (');
+  await vscode.window.showTextDocument(incompatibleDoc, { viewColumn: vscode.ViewColumn.One });
+  assert.equal(await vscode.commands.executeCommand('pdfNotebook.open'), incompatiblePath);
+  const syntaxSession = await api.getSession();
+  assert.ok(syntaxSession.lastError);
+  await wait(
+    () =>
+      syntaxSession.viewerDiagnostics?.error &&
+      !syntaxSession.viewerDiagnostics.templateUpgradeAvailable,
+    'cold syntax failure shows a diagnostic without offering a template upgrade',
+  );
+  await replace(incompatibleDoc, incompatibleDoc.getText().replace('\n#let invalid = (', ''));
+  await wait(
+    () =>
+      !syntaxSession.lastError &&
+      syntaxSession.viewerDiagnostics?.canvases > 0 &&
+      !syntaxSession.viewerDiagnostics.error,
+    'fixing cold syntax errors automatically recovers the preview',
+  );
+  syntaxSession.panel.dispose();
   const main = await vscode.workspace.openTextDocument(path.join(root, 'main.typ'));
   await vscode.window.showTextDocument(main, { viewColumn: vscode.ViewColumn.One });
   await vscode.commands.executeCommand('pdfNotebook.open');
@@ -197,6 +257,8 @@ async function run() {
       migrationPreservesUnsavedBody: true,
       upgradeButtonFollowsActiveEditor: true,
       templateUpgradeUndoRedo: true,
+      coldTemplateFailureRecovered: true,
+      coldSyntaxFailureRecovered: true,
       tinymistAutoDependency: true,
       coldPackageCacheRecovered: true,
       editorUnsavedContentSurvivesRestart: true,

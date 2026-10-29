@@ -43,6 +43,8 @@ $a + b = b + a$
 
 旧版笔记打开时，编辑器右上角会出现 **升级笔记模板**（向上箭头）按钮。点击后更新到当前插件内置的模板版本；升级完成后按钮隐藏，也支持撤销和重做。按钮随当前编辑器和未保存的 import 变化刷新，不自动改写或保存文件；较新版本的模板不会被降级。
 
+如果打开整本预览时编译失败，预览会显示错误详情，修正源码后自动恢复。旧版模板还会显示 **升级模板并重试**：例如 `0.3.2` 笔记使用 `#note(15, right)` 时，需要升级到 `0.3.3`。这个入口修改该预览对应笔记的导入，保留正文及未保存修改，支持撤销，不自动保存文件。
+
 旧版 `0.2.0`、`0.3.0`、`0.3.1` 和 `0.3.2` 模板也随插件提供，已有笔记可继续编译。需要采用最新默认行为时，右键笔记入口（或旧模板配置文件）→ **升级笔记模板**，也可从命令面板执行 **PDF Notebook: 升级笔记模板**，把旧版本导入更新到 `0.3.3`。这个命令通过编辑器修改 import，保留正文和未保存的修改；标准的 `note, notebook` 导入会变成 `*`，自定义导入和别名保持原样，是否保存由你决定。
 
 ## 页内右侧便签
@@ -192,7 +194,7 @@ npm run package
 npm run test:prepare
 npm test
 npm run test:host
-code --install-extension .\output\typst-pdf-notebook-0.3.6.vsix --force
+code --install-extension .\output\typst-pdf-notebook-0.3.7.vsix --force
 ```
 
 按 F5 可启动扩展开发宿主。`test:prepare` 下载指定版本的 VS Code，在空扩展目录安装本项目 VSIX，验证 Tinymist 自动依赖安装，并准备固定版本的测试字体。`NOTEBOOK_VSCODE_VERSION` 可指定 VS Code 版本；本地可用 `NOTEBOOK_CODE_BIN` 指定已有程序，或用 `NOTEBOOK_FONT_PATHS`（JSON 路径数组）使用本机字体。

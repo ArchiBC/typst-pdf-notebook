@@ -33,6 +33,15 @@
         <nav id="outline"></nav>
       </aside>
       <section id="viewer" aria-label="整本笔记预览">
+        <div id="problem" role="alert" hidden>
+          <strong>无法更新笔记预览</strong>
+          <p id="problem-hint"></p>
+          <button id="upgrade-template" hidden>升级模板并重试</button>
+          <details>
+            <summary>错误详情</summary>
+            <pre id="problem-detail"></pre>
+          </details>
+        </div>
         <div id="pages"></div>
         <div id="empty">正在加载笔记与原书…</div>
       </section>
