@@ -7,6 +7,7 @@ const {
   marketplaceArguments,
   assetUploads,
   newerThan,
+  getRelease,
 } = require('../scripts/release.cjs');
 const manifest = require('../package.json');
 const lock = require('../package-lock.json');
@@ -91,4 +92,54 @@ test('historical releases cannot replace a newer GitHub Latest release', () => {
   assert.equal(newerThan('0.3.3', 'v0.3.3'), false);
   assert.equal(newerThan('0.3.3'), true);
   assert.equal(newerThan('0.3.3', 'unrelated'), false);
+});
+
+test('release lookup finds drafts across authenticated pages when the tag endpoint returns 404', () => {
+  const plan = createPlan(manifest, lock, env);
+  const draft = { id: 42, draft: true, tag_name: plan.tag, assets: [] };
+  const calls = [];
+  const run = (command, args) => {
+    calls.push({ command, args });
+    return calls.length === 1
+      ? { status: 1, stderr: 'gh: Not Found (HTTP 404)' }
+      : { status: 0, stdout: JSON.stringify([[{ tag_name: 'v0.0.1' }], [draft]]) };
+  };
+  assert.deepEqual(getRelease(plan, `tags/${plan.tag}`, run), draft);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].command, 'gh');
+  assert.deepEqual(calls[1].args.slice(-2), ['--paginate', '--slurp']);
+  const published = { ...draft, draft: false };
+  assert.deepEqual(
+    getRelease(plan, `tags/${plan.tag}`, () => ({ status: 0, stdout: JSON.stringify(published) })),
+    published,
+  );
+});
+
+test('release lookup keeps missing drafts separate from permission and transport failures', () => {
+  const plan = createPlan(manifest, lock, env);
+  const missing = { status: 1, stderr: 'gh: Not Found (HTTP 404)' };
+  assert.equal(
+    getRelease(plan, 'latest', () => missing),
+    undefined,
+  );
+  let count = 0;
+  assert.equal(
+    getRelease(plan, `tags/${plan.tag}`, () =>
+      ++count === 1 ? missing : { status: 0, stdout: '[[]]' },
+    ),
+    undefined,
+  );
+  assert.throws(
+    () =>
+      getRelease(plan, `tags/${plan.tag}`, () => ({ status: 1, stderr: 'HTTP 403: forbidden' })),
+    /403/,
+  );
+  count = 0;
+  assert.throws(
+    () =>
+      getRelease(plan, `tags/${plan.tag}`, () =>
+        ++count === 1 ? missing : { status: 1, error: Error('network unavailable') },
+      ),
+    /network unavailable/,
+  );
 });

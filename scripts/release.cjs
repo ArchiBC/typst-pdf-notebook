@@ -134,14 +134,24 @@ function loadPlan(root) {
 function gh(args) {
   return execFileSync('gh', args, { encoding: 'utf8', windowsHide: true }).trim();
 }
-function getRelease(plan, target) {
-  const result = spawnSync('gh', ['api', `repos/${plan.repository}/releases/${target}`], {
-    encoding: 'utf8',
-    windowsHide: true,
-  });
+function getRelease(plan, target, run = spawnSync) {
+  const options = { encoding: 'utf8', windowsHide: true };
+  const result = run('gh', ['api', `repos/${plan.repository}/releases/${target}`], options);
   if (result.status === 0) return JSON.parse(result.stdout);
-  if (/HTTP 404/.test(result.stderr || '')) return undefined;
-  throw Error(result.error?.message || result.stderr || 'Cannot read GitHub release');
+  if (!/HTTP 404/.test(result.stderr || ''))
+    throw Error(result.error?.message || result.stderr || 'Cannot read GitHub release');
+  if (!target.startsWith('tags/')) return undefined;
+  // The tag endpoint returns published releases; drafts require an authenticated listing.
+  const drafts = run(
+    'gh',
+    ['api', `repos/${plan.repository}/releases?per_page=100`, '--paginate', '--slurp'],
+    options,
+  );
+  if (drafts.status !== 0)
+    throw Error(drafts.error?.message || drafts.stderr || 'Cannot read GitHub draft releases');
+  return JSON.parse(drafts.stdout)
+    .flat()
+    .find((release) => release.tag_name === target.slice(5));
 }
 async function githubRelease(root, plan, verified) {
   if (plan.dryRun) throw Error('A dry run cannot publish');
@@ -264,4 +274,11 @@ if (require.main === module)
     console.error(error.message);
     process.exitCode = 1;
   });
-module.exports = { createPlan, verifyPackage, marketplaceArguments, assetUploads, newerThan };
+module.exports = {
+  createPlan,
+  verifyPackage,
+  marketplaceArguments,
+  assetUploads,
+  newerThan,
+  getRelease,
+};
