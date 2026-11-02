@@ -425,6 +425,201 @@ async function main() {
           throw Error('Latest notes pagination lost');
       });
     if (name === 'real') {
+      // Exercise actual wheel input, including the browser's default scroll behavior.
+      await page.setViewportSize({ width: 1000, height: 800 });
+      await page.selectOption('#zoom', '1');
+      await page.locator('[data-key="source:1"]').scrollIntoViewIfNeeded();
+      await page.waitForFunction(
+        () => window.__benchmark.ready('source:1'),
+        {},
+        { timeout: 30000 },
+      );
+      await page.waitForTimeout(300);
+      const wheelPoint = await page.evaluate(() => {
+        const viewer = document.querySelector('#viewer');
+        const paper = document
+          .querySelector('[data-key="source:1"] .paper')
+          .getBoundingClientRect();
+        const bounds = viewer.getBoundingClientRect();
+        window.__wheelEvents = [];
+        viewer.addEventListener('wheel', (event) => {
+          window.__wheelEvents.push({
+            ctrl: event.ctrlKey,
+            prevented: event.defaultPrevented,
+            key: event.target.closest('.sheet')?.dataset.key,
+            delta: event.deltaY,
+          });
+        });
+        return {
+          x: (Math.max(bounds.left, paper.left) + Math.min(bounds.right, paper.right)) / 2,
+          y: (Math.max(bounds.top, paper.top) + Math.min(bounds.bottom, paper.bottom)) / 2,
+        };
+      });
+      const wheelState = () =>
+        page.evaluate(({ x, y }) => {
+          const viewer = document.querySelector('#viewer');
+          const paper = document
+            .querySelector('[data-key="source:1"] .paper')
+            .getBoundingClientRect();
+          return {
+            width: paper.width,
+            x: (x - paper.left) / paper.width,
+            y: (y - paper.top) / paper.height,
+            scrollTop: viewer.scrollTop,
+            events: window.__wheelEvents,
+          };
+        }, wheelPoint);
+      await page.mouse.move(wheelPoint.x, wheelPoint.y);
+      const beforeWheel = await wheelState();
+      await page.keyboard.down('Control');
+      await page.mouse.wheel(0, -100);
+      await page.keyboard.up('Control');
+      await page.waitForFunction(
+        (width) =>
+          document.querySelector('[data-key="source:1"] .paper').getBoundingClientRect().width >
+          width,
+        beforeWheel.width,
+      );
+      const enlarged = await wheelState();
+      assert.ok(enlarged.events.some((event) => event.ctrl && event.prevented));
+      assert.ok(
+        Math.abs(enlarged.x - beforeWheel.x) < 0.003,
+        'wheel zoom keeps the horizontal anchor',
+      );
+      assert.ok(
+        Math.abs(enlarged.y - beforeWheel.y) < 0.003,
+        'wheel zoom keeps the vertical anchor',
+      );
+      await page.keyboard.down('Control');
+      await page.mouse.wheel(0, 100);
+      await page.keyboard.up('Control');
+      await page.waitForFunction(
+        (width) =>
+          Math.abs(
+            document.querySelector('[data-key="source:1"] .paper').getBoundingClientRect().width -
+              width,
+          ) < 1,
+        beforeWheel.width,
+      );
+      const restored = await wheelState();
+      await page.mouse.wheel(0, 160);
+      await page.waitForFunction(
+        (top) => document.querySelector('#viewer').scrollTop > top,
+        restored.scrollTop,
+      );
+      const scrolled = await wheelState();
+      assert.ok(Math.abs(scrolled.width - restored.width) < 1, 'ordinary wheel only scrolls');
+      assert.ok(scrolled.events.some((event) => !event.ctrl && !event.prevented));
+      await page.keyboard.down('Control');
+      for (let i = 0; i < 5; i++) await page.mouse.wheel(0, -1000);
+      await page.waitForFunction(
+        (width) =>
+          Math.abs(
+            document.querySelector('[data-key="source:1"] .paper').getBoundingClientRect().width -
+              3 * width,
+          ) < 1,
+        beforeWheel.width,
+      );
+      for (let i = 0; i < 12; i++) await page.mouse.wheel(0, 1000);
+      await page.keyboard.up('Control');
+      await page.waitForFunction(
+        (width) =>
+          Math.abs(
+            document.querySelector('[data-key="source:1"] .paper').getBoundingClientRect().width -
+              0.1 * width,
+          ) < 1,
+        beforeWheel.width,
+      );
+      await page.waitForFunction(
+        () => {
+          const bounds = document.querySelector('#viewer').getBoundingClientRect();
+          const visible = [...document.querySelectorAll('.sheet')].filter((sheet) => {
+            const rect = sheet.getBoundingClientRect();
+            return rect.bottom > bounds.top && rect.top < bounds.bottom;
+          });
+          return (
+            visible.length > 0 &&
+            visible.every((sheet) => window.__benchmark.ready(sheet.dataset.key))
+          );
+        },
+        {},
+        { timeout: 30000 },
+      );
+      await page.selectOption('#zoom', '1');
+      await page.waitForTimeout(300);
+      await page.waitForFunction(
+        () => window.__benchmark.state().running === 0,
+        {},
+        { timeout: 30000 },
+      );
+      const sidebarHidden = await page.evaluate(() => {
+        const sidebar = document.querySelector('#sidebar');
+        const hidden = sidebar.classList.contains('hidden');
+        sidebar.classList.add('hidden');
+        return hidden;
+      });
+      await page.setViewportSize({ width: 270, height: 800 });
+      await page.selectOption('#zoom', 'width');
+      await page.locator('[data-key="source:1"]').scrollIntoViewIfNeeded();
+      await page.waitForTimeout(500);
+      const fit = await page.evaluate(() => {
+        const r = document.querySelector('[data-key="source:1"] .paper').getBoundingClientRect();
+        const v = document.querySelector('#viewer').getBoundingClientRect();
+        return {
+          width: r.width,
+          x: (Math.max(r.left, v.left) + Math.min(r.right, v.right)) / 2,
+          y: (Math.max(r.top, v.top) + Math.min(r.bottom, v.bottom)) / 2,
+        };
+      });
+      assert.ok(fit.width < 0.4 * beforeWheel.width, 'fit-to-width starts below 40%');
+      await page.mouse.move(fit.x, fit.y);
+      await page.keyboard.down('Control');
+      await page.mouse.wheel(0, 100);
+      await page.waitForFunction(
+        (width) =>
+          document.querySelector('[data-key="source:1"] .paper').getBoundingClientRect().width <
+          width * 0.96,
+        fit.width,
+      );
+      await page.mouse.wheel(0, -100);
+      await page.waitForFunction(
+        (width) =>
+          Math.abs(
+            document.querySelector('[data-key="source:1"] .paper').getBoundingClientRect().width -
+              width,
+          ) < 1,
+        fit.width,
+      );
+      await page.mouse.wheel(0, -100);
+      await page.waitForTimeout(350);
+      const fitEnlarged = await wheelState();
+      assert.ok(
+        fitEnlarged.width > fit.width * 1.04,
+        `small fit wheel must enlarge: ${JSON.stringify({ fit, fitEnlarged })}`,
+      );
+      await page.mouse.wheel(0, 100);
+      await page.keyboard.up('Control');
+      await page.waitForFunction(
+        (width) =>
+          Math.abs(
+            document.querySelector('[data-key="source:1"] .paper').getBoundingClientRect().width -
+              width,
+          ) < 1,
+        fit.width,
+      );
+      await page.evaluate(
+        (hidden) => document.querySelector('#sidebar').classList.toggle('hidden', hidden),
+        sidebarHidden,
+      );
+      result.wheelZoom = {
+        anchored: true,
+        normalScroll: true,
+        minimum: 0.1,
+        maximum: 3,
+        smallFit: true,
+      };
+      await page.setViewportSize({ width: 1440, height: 1000 });
+
       // Check selectable Chinese text and link coordinates while CSS-scaled during zoom.
       await page.locator('[data-key="source:300"]').scrollIntoViewIfNeeded();
       await page.waitForFunction(

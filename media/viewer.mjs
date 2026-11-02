@@ -94,6 +94,29 @@ function restore(anchor) {
   const node = nodes.get(anchor.key);
   if (node) viewer.scrollTop = node.top + anchor.fraction * node.height;
 }
+function captureZoomPoint(event) {
+  const bounds = viewer.getBoundingClientRect();
+  const node =
+    event.target.closest('.sheet') ||
+    geometry[rowAt(viewer.scrollTop + event.clientY - bounds.top)];
+  if (!node?.paper) return null;
+  const paper = node.paper.getBoundingClientRect();
+  if (!paper.width || !paper.height) return null;
+  return {
+    key: node.row.key,
+    scale: node.scale,
+    x: (event.clientX - paper.left) / paper.width,
+    y: (event.clientY - paper.top) / paper.height,
+    clientX: event.clientX,
+    clientY: event.clientY,
+  };
+}
+function restoreZoomPoint(anchor) {
+  const paper = nodes.get(anchor.key)?.paper.getBoundingClientRect();
+  if (!paper) return;
+  viewer.scrollLeft += paper.left + paper.width * anchor.x - anchor.clientX;
+  viewer.scrollTop += paper.top + paper.height * anchor.y - anchor.clientY;
+}
 function rowAt(y) {
   let lo = 0,
     hi = geometry.length;
@@ -254,7 +277,7 @@ async function draw(key) {
       evict();
       if (node.token !== token) return;
       const task = page.render({
-        canvasContext: canvas.getContext('2d'),
+        canvasContext: canvas.getContext('2d', { alpha: false }),
         viewport,
         transform: ratio === 1 ? null : [ratio, 0, 0, ratio, 0, 0],
       });
@@ -521,9 +544,9 @@ function position(p) {
   queueVisible();
   report();
 }
-function changeZoom(next) {
+function changeZoom(next, point) {
   if (next === zoom && Math.abs(pageScale(next) - scale) < 0.000001) return;
-  const anchor = capture();
+  const anchor = point || capture();
   zoom = next;
   clearTimeout(zoomTimer);
   // Keep visible pixels/text while zooming, including a partially rendered page.
@@ -535,7 +558,8 @@ function changeZoom(next) {
     for (const layer of node.textLayers || []) layer.cancel();
   }
   layout();
-  restore(anchor);
+  if (point) restoreZoomPoint(anchor);
+  else restore(anchor);
   zoomTimer = setTimeout(() => {
     zoomTimer = null;
     for (const key of [...rendered.keys()]) release(key);
@@ -551,16 +575,33 @@ function currentScale() {
   const row = plan[Number($('page').value) - 1];
   return nodes.get(row?.key)?.scale ?? scale;
 }
-$('zoom-in').onclick = () => {
-  const next = Math.min(3, (currentScale() / (96 / 72)) * 1.15);
-  changeZoom(next);
+function adjustZoom(factor, point) {
+  const row = nodes.get(point?.key)?.row ?? plan[Number($('page').value) - 1];
+  const current = (point?.scale ?? currentScale()) / (96 / 72);
+  const fit = pageScale('width', row?.width ?? maxPageWidth) / (96 / 72);
+  const next = Math.max(
+    Math.min(0.1, fit, current),
+    Math.min(Math.max(3, fit, current), current * factor),
+  );
+  if (Math.abs(next - current) < 1e-9) return;
+  changeZoom(next, point);
   $('zoom').value = '';
-};
-$('zoom-out').onclick = () => {
-  const next = Math.max(0.4, currentScale() / (96 / 72) / 1.15);
-  changeZoom(next);
-  $('zoom').value = '';
-};
+}
+$('zoom-in').onclick = () => adjustZoom(1.15);
+$('zoom-out').onclick = () => adjustZoom(1 / 1.15);
+viewer.addEventListener(
+  'wheel',
+  (event) => {
+    if (!event.ctrlKey || !event.deltaY) return;
+    event.preventDefault();
+    if (!plan.length) return;
+    const point = captureZoomPoint(event);
+    const units = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewer.clientHeight : 1;
+    const delta = Math.max(-300, Math.min(300, event.deltaY * units));
+    adjustZoom(1.15 ** (-delta / 100), point);
+  },
+  { passive: false },
+);
 $('toggle-outline').onclick = () => {
   $('sidebar').classList.toggle('hidden');
   changeZoom(zoom);
