@@ -61,6 +61,42 @@ function summary(values) {
     total: Number(values.reduce((a, b) => a + b, 0).toFixed(2)),
   };
 }
+async function checkCanvasMapping(page, key, expectedParts) {
+  const geometry = await page.evaluate((key) => {
+    const sheet = [...document.querySelectorAll('.sheet')].find((s) => s.dataset.key === key);
+    const paper = sheet.querySelector('.paper').getBoundingClientRect();
+    const ratio = Math.min(
+      devicePixelRatio || 1,
+      2,
+      Math.sqrt((16 * 1024 * 1024) / (paper.width * paper.height)),
+    );
+    return {
+      ratio,
+      scale: sheet.scale,
+      rasterScale: sheet.rasterScale,
+      canvases: [...sheet.querySelectorAll('canvas')].map((canvas) => {
+        const rect = canvas.getBoundingClientRect();
+        return {
+          kind: canvas.closest('.page-part').dataset.kind,
+          width: canvas.width,
+          height: canvas.height,
+          cssWidth: rect.width,
+          cssHeight: rect.height,
+        };
+      }),
+    };
+  }, key);
+  assert.equal(geometry.canvases.length, expectedParts, `missing canvases in ${key}`);
+  assert.equal(geometry.scale, geometry.rasterScale, `stale raster in ${key}`);
+  for (const canvas of geometry.canvases) {
+    assert.ok(
+      Math.abs(canvas.width - canvas.cssWidth * geometry.ratio) < 0.06 &&
+        Math.abs(canvas.height - canvas.cssHeight * geometry.ratio) < 0.06,
+      `canvas pixels are being resampled in ${key}: ${JSON.stringify(geometry)}`,
+    );
+  }
+  return geometry;
+}
 async function main() {
   await fs.mkdir(output, { recursive: true });
   fixture = await fs.mkdtemp(path.join(output, 'stress-fixture-'));
@@ -251,7 +287,10 @@ async function main() {
     width: Number(process.env.NOTEBOOK_STRESS_WIDTH || 1440),
     height: Number(process.env.NOTEBOOK_STRESS_HEIGHT || 1000),
   };
-  report.viewport = { ...viewport, deviceScaleFactor: 2 };
+  const deviceScaleFactor = Number(process.env.NOTEBOOK_STRESS_DPR || 2);
+  if (!(deviceScaleFactor > 0 && deviceScaleFactor <= 4))
+    throw Error('Invalid device scale factor');
+  report.viewport = { ...viewport, deviceScaleFactor };
   const selectedCases =
     process.env.NOTEBOOK_STRESS_CASES?.split(',') ||
     (process.env.NOTEBOOK_STRESS_FOCUS ? ['real'] : ['real', 'large', 'side']);
@@ -259,7 +298,7 @@ async function main() {
     if (!['real', 'large', 'side'].includes(name)) throw Error('Unknown stress case: ' + name);
     const context = await browser.newContext({
       viewport,
-      deviceScaleFactor: 2,
+      deviceScaleFactor,
     });
     const page = await context.newPage();
     await page.addInitScript(() => {
@@ -425,8 +464,29 @@ async function main() {
           throw Error('Latest notes pagination lost');
       });
     if (name === 'real') {
+      const noteKey = await page.locator('.sheet.note').first().getAttribute('data-key');
+      assert.ok(noteKey, 'a rendered notebook should contain a note page');
+      const rasterChecks = [];
+      for (const zoom of ['0.75', '1', '1.5']) {
+        await page.selectOption('#zoom', zoom);
+        for (const key of ['source:1', noteKey]) {
+          await page.locator(`[data-key="${key}"]`).scrollIntoViewIfNeeded();
+          await page.waitForFunction(
+            (key) => {
+              const sheet = [...document.querySelectorAll('.sheet')].find(
+                (s) => s.dataset.key === key,
+              );
+              return window.__benchmark.ready(key) && sheet.scale === sheet.rasterScale;
+            },
+            key,
+            { timeout: 30000 },
+          );
+          rasterChecks.push({ zoom, key, ...(await checkCanvasMapping(page, key, 1)) });
+        }
+      }
+      result.rasterChecks = rasterChecks;
       // Exercise actual wheel input, including the browser's default scroll behavior.
-      await page.setViewportSize({ width: 1000, height: 800 });
+      await page.setViewportSize({ width: 900, height: 800 });
       await page.selectOption('#zoom', '1');
       await page.locator('[data-key="source:1"]').scrollIntoViewIfNeeded();
       await page.waitForFunction(
@@ -484,7 +544,7 @@ async function main() {
       assert.ok(enlarged.events.some((event) => event.ctrl && event.prevented));
       assert.ok(
         Math.abs(enlarged.x - beforeWheel.x) < 0.003,
-        'wheel zoom keeps the horizontal anchor',
+        `wheel zoom keeps the horizontal anchor: ${JSON.stringify({ beforeWheel, enlarged })}`,
       );
       assert.ok(
         Math.abs(enlarged.y - beforeWheel.y) < 0.003,
@@ -520,6 +580,17 @@ async function main() {
           ) < 1,
         beforeWheel.width,
       );
+      await page.waitForFunction(
+        () => {
+          const sheet = document.querySelector('[data-key="source:1"]');
+          return window.__benchmark.ready('source:1') && sheet.scale === sheet.rasterScale;
+        },
+        {},
+        { timeout: 30000 },
+      );
+      result.maximumZoomRaster = await checkCanvasMapping(page, 'source:1', 1);
+      if (deviceScaleFactor >= 2)
+        assert.ok(result.maximumZoomRaster.ratio < 2, 'large pages use the raster pixel limit');
       for (let i = 0; i < 12; i++) await page.mouse.wheel(0, 1000);
       await page.keyboard.up('Control');
       await page.waitForFunction(
@@ -636,7 +707,8 @@ async function main() {
         );
         window.__copyLink = paper.querySelector('.link-layer a');
         const box = paper.getBoundingClientRect(),
-          span = window.__copySpan.getBoundingClientRect();
+          span = window.__copySpan.getBoundingClientRect(),
+          canvas = paper.querySelector('canvas').getBoundingClientRect();
         const range = document.createRange();
         range.selectNodeContents(paper.querySelector('.textLayer'));
         const selection = getSelection();
@@ -646,6 +718,7 @@ async function main() {
           text: selection.toString(),
           x: (span.left - box.left) / box.width,
           y: (span.top - box.top) / box.height,
+          canvas: [canvas.width / box.width, canvas.height / box.height],
           link: window.__copyLink
             ? (() => {
                 const r = window.__copyLink.getBoundingClientRect();
@@ -667,11 +740,13 @@ async function main() {
         const box = document
             .querySelector('[data-key="source:300"] .paper')
             .getBoundingClientRect(),
-          span = window.__copySpan.getBoundingClientRect();
+          span = window.__copySpan.getBoundingClientRect(),
+          canvas = document.querySelector('[data-key="source:300"] canvas').getBoundingClientRect();
         return {
           x: (span.left - box.left) / box.width,
           y: (span.top - box.top) / box.height,
           connected: window.__copySpan.isConnected,
+          canvas: [canvas.width / box.width, canvas.height / box.height],
           link: window.__copyLink
             ? (() => {
                 const r = window.__copyLink.getBoundingClientRect();
@@ -692,6 +767,8 @@ async function main() {
         );
       if (before.link && before.link.some((n, i) => Math.abs(n - during.link[i]) > 0.003))
         throw Error('PDF link coordinates shifted during deferred zoom');
+      if (before.canvas.some((n, i) => Math.abs(n - during.canvas[i]) > 0.001))
+        throw Error('Original canvas shifted during deferred zoom');
       await page.waitForTimeout(400);
       result.selection = {
         characters: before.text.length,
@@ -783,6 +860,7 @@ async function main() {
       assert.match(selectable.original, /Page 1:/);
       assert.match(selectable.note, /SIDE PREVIEW TARGET/);
       assert.ok(Math.abs(selectable.gap) < 0.5);
+      result.sideRaster = await checkCanvasMapping(page, 'side:1:note-1', 2);
       if (rotation === 90) {
         assert.ok(
           selectable.originalGlyph.height > selectable.originalGlyph.width * 3,
@@ -852,11 +930,17 @@ async function main() {
             r.height / p.height,
           ];
         };
-        const before = { text: box(span), link: box(link) };
+        const canvasSizes = () =>
+          [...document.querySelectorAll('.sheet.side .page-part')].map((part) => {
+            const p = part.getBoundingClientRect(),
+              c = part.querySelector('canvas').getBoundingClientRect();
+            return [c.width / p.width, c.height / p.height];
+          });
+        const before = { text: box(span), link: box(link), canvases: canvasSizes() };
         const zoom = document.querySelector('#zoom');
         zoom.value = '1.25';
         zoom.dispatchEvent(new Event('change'));
-        return { before, after: { text: box(span), link: box(link) } };
+        return { before, after: { text: box(span), link: box(link), canvases: canvasSizes() } };
       });
       for (const key of ['text', 'link'])
         assert.ok(
@@ -865,6 +949,12 @@ async function main() {
           ),
           `side ${key} remains aligned during zoom: ${JSON.stringify(zoomAlignment)}`,
         );
+      assert.ok(
+        zoomAlignment.before.canvases.every((size, i) =>
+          size.every((v, j) => Math.abs(v - zoomAlignment.after.canvases[i][j]) < 0.001),
+        ),
+        `side canvases remain aligned during zoom: ${JSON.stringify(zoomAlignment)}`,
+      );
       await page.selectOption('#zoom', 'width');
       await page.waitForFunction(
         () => window.__benchmark.ready('side:1:note-1'),

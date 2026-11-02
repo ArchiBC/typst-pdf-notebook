@@ -148,7 +148,8 @@ function release(key) {
     node.textLayers = [];
     node.textElements = [];
     node.linkLayers = [];
-    for (const canvas of node.paper.querySelectorAll('canvas')) canvas.width = canvas.height = 0;
+    for (const canvas of node.canvases || []) canvas.width = canvas.height = 0;
+    node.canvases = [];
     node.paper.replaceChildren();
     // cleanup waits internally for cancelled PDF.js render tasks to finish.
     for (const page of node.pdfPages || []) page.cleanup();
@@ -161,6 +162,10 @@ function release(key) {
 function pageScale(next, width = maxPageWidth) {
   const available = Math.max(180, viewer.clientWidth - (viewer.clientWidth < 480 ? 18 : 42));
   return next === 'width' ? available / width : (Number(next) * 96) / 72;
+}
+function sizeCanvas(canvas, scale) {
+  canvas.style.width = `${canvas.rasterWidth * scale}px`;
+  canvas.style.height = `${canvas.rasterHeight * scale}px`;
 }
 function layout() {
   scale = pageScale(zoom);
@@ -178,6 +183,7 @@ function layout() {
     paper.style.setProperty('--scale-round-x', '1px');
     paper.style.setProperty('--scale-round-y', '1px');
     node.style.width = paper.style.width;
+    for (const canvas of node.canvases || []) sizeCanvas(canvas, node.scale / node.rasterScale);
     for (const element of node.textElements || [])
       element.style.transform = `scale(${node.scale / node.rasterScale})`;
     for (const layer of node.linkLayers || []) {
@@ -243,6 +249,7 @@ async function draw(key) {
     node.textLayers = [];
     node.textElements = [];
     node.linkLayers = [];
+    node.canvases = [];
     node.rasterScale = localScale;
     paper.replaceChildren();
     const ratio = Math.min(
@@ -269,6 +276,12 @@ async function draw(key) {
       const canvas = document.createElement('canvas');
       canvas.width = Math.ceil(viewport.width * ratio);
       canvas.height = Math.ceil(viewport.height * ratio);
+      // Keep rounded backing pixels at their intended size instead of
+      // resampling them to the fractional viewport dimensions.
+      canvas.rasterWidth = canvas.width / ratio;
+      canvas.rasterHeight = canvas.height / ratio;
+      sizeCanvas(canvas, node.scale / localScale);
+      node.canvases.push(canvas);
       container.append(canvas);
       paper.append(container);
       bytes += canvas.width * canvas.height * 4;
