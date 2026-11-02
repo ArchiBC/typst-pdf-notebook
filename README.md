@@ -1,5 +1,7 @@
 # Typst PDF Notebook
 
+[在 VS Code 扩展市场安装](https://marketplace.visualstudio.com/items?itemName=ArcBC.typst-pdf-notebook)
+
 VS Code 插件：Typst 排版笔记，插件负责整本 PDF 阅读、虚拟插页和最终导出。运行和构建均不需要 Python。
 
 Read a PDF alongside native Typst notes. Keep the original text selectable, jump between note source and preview, and export one PDF with notes inserted after the relevant pages.
