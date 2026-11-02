@@ -19,6 +19,39 @@
 
 #let source-ref(page, body) = link("pdf-notebook-source:" + str(page), body)
 
+// Rectangles use the displayed page, measured from its top left. The caller
+// reads the PDF so its path resolves in the project, not in this package.
+#let source-clip(pdf, page, size, rect) = layout(available => {
+  let (x, y, w, h) = rect
+  let factor = calc.min(1, available.width / (w * 1pt))
+  let unit = factor * 1pt
+  box(width: w * unit, height: h * unit, clip: true,
+    place(top + left, dx: -x * unit, dy: -y * unit,
+      image(pdf, page: page, width: size.first() * unit, height: size.last() * unit, fit: "stretch")))
+})
+
+#let source-comment(page, excerpt, areas, body, id: none, fingerprint: none, after: auto) = metadata((
+  kind: "pdf-comment-input", page: page, excerpt: excerpt, areas: areas, body: body,
+  id: id, fingerprint: fingerprint, after: if after == auto { page } else { after },
+))
+#let source-anchor(page, excerpt, areas, id: none, fingerprint: none, after: auto) = metadata((
+  kind: "pdf-comment-anchor", page: page, excerpt: excerpt, areas: areas,
+  id: id, fingerprint: fingerprint, after: if after == auto { page } else { after },
+))
+
+#let comment-body(c) = [
+  #context {
+    let pos = here().position()
+    metadata((kind: "pdf-highlight", id: c.id, page: c.page, areas: c.areas,
+      excerpt: c.excerpt, fingerprint: c.fingerprint, notePage: here().page(),
+      noteX: pos.x.pt(), noteY: pos.y.pt()))
+  }
+  #block(inset: (left: 5pt), stroke: (left: 2pt + rgb("#d6ab3b")))[
+    #link("pdf-notebook-mark:" + c.id, text(c.excerpt))
+  ]
+  #c.body
+]
+
 #let invisible-heading(title, level) = {
   show heading: it => []
   heading(level: level, numbering: none, outlined: true, bookmarked: true, title)
@@ -76,6 +109,8 @@
 
 #let collect-notes(body) = {
   let entries = ()
+  let comments = ()
+  let anchors = (:)
   let current = none
   let parts = ()
   for item in note-items(body) {
@@ -92,6 +127,10 @@
       } else {
         entries.push(value.note)
       }
+    } else if kind == "pdf-comment-input" {
+      comments.push(value)
+    } else if kind == "pdf-comment-anchor" {
+      anchors.insert(value.id, value)
     } else if current != none {
       parts.push(item)
     } else {
@@ -101,7 +140,7 @@
   if current != none {
     entries.push((..current, body: parts.fold([], (a, b) => a + b)))
   }
-  entries
+  (entries: entries, comments: comments.map(c => (: ..c, ..anchors.at(c.id, default: (:)))))
 }
 
 #let notebook(
@@ -122,12 +161,24 @@
   let layout = json(bytes(sys.inputs.at("__pdf_notebook_layout", default: "{}")))
   let content = {
     // 插页与原书书签由插件处理；Typst 只排版笔记，不读取原 PDF。
-    metadata((kind: "pdf-notebook", version: 1, template: "chengsi", pdf: pdf,
+    metadata((kind: "pdf-notebook", version: 1, template: "chengsi", comments: 1, pdf: pdf,
       title: title, bookmarks: bookmarks, sideLayout: 1, noteLayout: layout))
-    let entries = collect-notes(body).filter(n =>
-      note-items(n.body).filter(item => not note-whitespace(item)).len() > 0).map(raw =>
-      (title: none, style: "blank", chrome: auto, id: none, placement: "after", width: auto, margin: auto,
-        ..note-settings.at(str(raw.after), default: (:)), ..raw))
+    let prepare(raw) = (
+      title: none, style: "blank", chrome: auto, id: none, placement: "after", width: auto, margin: auto,
+      ..note-settings.at(str(raw.after), default: (:)), ..raw)
+    let collected = collect-notes(body)
+    let entries = collected.entries.filter(n =>
+      note-items(n.body).filter(item => not note-whitespace(item)).len() > 0).map(prepare)
+    for c in collected.comments {
+      let index = entries.position(n => n.placement == "right" and
+        (n.after == c.after or (n.at("comment-page", default: false) and n.after == c.page)))
+      if index == none {
+        entries.push(prepare((after: c.page, placement: "right", id: "highlights-" + c.id,
+          title: "第 " + str(c.page) + " 页注释", comment-page: true, body: comment-body(c))))
+      } else {
+        entries.at(index).body += parbreak() + comment-body(c)
+      }
+    }
     let side-counts = (:)
     for item in entries {
       if item.placement == "right" {
@@ -152,6 +203,7 @@
           page-number: current => current - query(start-label).first().location().page() + 1,
         )[
           #context metadata((kind: "pdf-note", id: id, after: item.after,
+            ..if item.at("comment-page", default: false) { (commentPage: true) } else { (:) },
             title: title, placement: placement, requestedPlacement: item.placement,
             ..if fallback == none { (:) } else { (fallback: fallback) }, page: here().page()))
           #start-label

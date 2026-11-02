@@ -1,3 +1,5 @@
+import { setupReferences } from './references.mjs';
+
 const host = window.notebookHost;
 const assets = window.notebookAssets;
 const pdfjs = await import(assets.pdfjs);
@@ -49,6 +51,28 @@ const options = {
   wasmUrl: assets.wasm,
   isEvalSupported: false,
 };
+const references = setupReferences({
+  viewer,
+  send: (m) => host.postMessage(m),
+  status,
+  openNote: (m) => position({ page: m.notePage, x: m.noteX, y: m.noteY }),
+  openSource: (m) => {
+    const row = outputFor('source', m.page);
+    if (!row) return;
+    go(row.outputPage);
+    const part = row.parts.find((p) => p.kind === 'source'),
+      node = nodes.get(row.key);
+    const paper = node.paper.getBoundingClientRect(),
+      bounds = viewer.getBoundingClientRect();
+    const [u, v] = m.areas[0];
+    viewer.scrollTop +=
+      paper.top + (part.y + v * part.height) * node.scale - bounds.top - viewer.clientHeight * 0.3;
+    const x = paper.left + (part.x + u * part.width) * node.scale;
+    if (x < bounds.left || x > bounds.right)
+      viewer.scrollLeft += x - bounds.left - viewer.clientWidth * 0.3;
+    focusPage(row);
+  },
+});
 function status(text, error = false) {
   $('status').textContent = text;
   document.querySelector('footer').classList.toggle('error', error);
@@ -87,11 +111,20 @@ function report() {
 function capture() {
   const top = viewer.scrollTop;
   const node = geometry[rowAt(top)];
-  return node ? { key: node.row.key, fraction: (top - node.top) / node.height } : null;
+  return node
+    ? {
+        key: node.row.key,
+        sourcePage: node.row.kind === 'note' ? null : node.row.page,
+        fraction: (top - node.top) / node.height,
+      }
+    : null;
 }
 function restore(anchor) {
   if (!anchor) return;
-  const node = nodes.get(anchor.key);
+  // Adding the first side comment replaces source:N with a wider side:N row.
+  const node =
+    nodes.get(anchor.key) ||
+    (anchor.sourcePage && nodes.get(outputFor('source', anchor.sourcePage)?.key));
   if (node) viewer.scrollTop = node.top + anchor.fraction * node.height;
 }
 function captureZoomPoint(event) {
@@ -376,6 +409,7 @@ async function links(page, node, viewport, token, part, container) {
     layer = document.createElement('div');
   if (node.token !== token) return;
   layer.className = 'link-layer';
+  if (part.kind === 'source') references.annotations(container, list, viewport);
   for (const annotation of list) {
     if (annotation.subtype !== 'Link') continue;
     const r = [
@@ -391,7 +425,11 @@ async function links(page, node, viewport, token, part, container) {
       const original = /^pdf-notebook-source:(\d+)$/.exec(
         annotation.unsafeUrl || annotation.url || '',
       );
-      if (original) {
+      const mark = /^pdf-notebook-mark:([\w-]+)$/.exec(
+        annotation.unsafeUrl || annotation.url || '',
+      );
+      if (mark) references.link(mark[1]);
+      else if (original) {
         const row = outputFor('source', Number(original[1]));
         if (row) go(row.outputPage);
       } else if (annotation.url && /^https?:\/\//.test(annotation.url))
@@ -491,6 +529,7 @@ async function update(message) {
   $('title').textContent = message.title || 'PDF 阅读笔记';
   $('total').textContent = '/ ' + plan.length;
   $('page').max = plan.length;
+  references.document(message);
   layout();
   restore(anchor);
   renderOutline();
@@ -498,7 +537,11 @@ async function update(message) {
   else {
     $('problem').hidden = true;
     $('upgrade-template').hidden = true;
-    status(`${plan.length} 页 · ${message.noteCount} 份笔记`);
+    const stale = (message.highlights || []).filter((m) => m.stale).length;
+    status(
+      `${plan.length} 页 · ${message.noteCount} 份笔记` +
+        (stale ? ` · ${stale} 处高亮的原页已变更，请核对` : ''),
+    );
   }
   queueVisible();
   report();
@@ -560,6 +603,7 @@ function position(p) {
 function changeZoom(next, point) {
   if (next === zoom && Math.abs(pageScale(next) - scale) < 0.000001) return;
   const anchor = point || capture();
+  references.zoom();
   zoom = next;
   clearTimeout(zoomTimer);
   // Keep visible pixels/text while zooming, including a partially rendered page.
@@ -598,7 +642,14 @@ function adjustZoom(factor, point) {
   );
   if (Math.abs(next - current) < 1e-9) return;
   changeZoom(next, point);
-  $('zoom').value = '';
+  const select = $('zoom');
+  select.value = String(Number(next.toFixed(8)));
+  if (select.selectedIndex < 0) {
+    const custom = $('custom-zoom');
+    custom.value = String(next);
+    custom.textContent = `${Math.round(next * 1000) / 10}%`;
+    custom.selected = true;
+  }
 }
 $('zoom-in').onclick = () => adjustZoom(1.15);
 $('zoom-out').onclick = () => adjustZoom(1 / 1.15);
@@ -681,6 +732,7 @@ new ResizeObserver(() => {
 window.addEventListener('message', (e) => {
   const m = e.data;
   if (m.type === 'document') update(m).catch((e) => status(e.message, true));
+  else if (m.type === 'reference-result') references.result(m);
   else if (m.type === 'position') position(m);
   else if (m.type === 'status') status(m.text);
   else if (m.type === 'error') showError(m);

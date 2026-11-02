@@ -2,6 +2,7 @@ const vscode = require('vscode'),
   assert = require('node:assert/strict'),
   fs = require('node:fs'),
   path = require('node:path');
+const { PACKAGE_IMPORT } = require('../src/template.cjs');
 async function wait(fn, label) {
   const end = Date.now() + 25000;
   while (Date.now() < end) {
@@ -73,7 +74,7 @@ async function run() {
   );
   const starter = await vscode.workspace.openTextDocument(initialized);
   const starterText = starter.getText();
-  assert.match(starterText, /@local\/typst-pdf-notebook:0\.3\.3/);
+  assert.ok(starterText.includes(PACKAGE_IMPORT));
   assert.match(starterText, /size: \(498\.9pt, 708\.66pt\)/);
   assert.match(starterText, /pdf: "练习册.PDF"/);
   assert.equal(starterText.includes('template.typ'), false);
@@ -151,7 +152,7 @@ async function run() {
   await vscode.window.showTextDocument(oldDoc, { viewColumn: vscode.ViewColumn.One });
   await wait(() => api.canUpgradeTemplate, 'upgrade button returns with the old notebook');
   assert.equal(await vscode.commands.executeCommand('pdfNotebook.useChengsi'), true);
-  assert.ok(oldDoc.getText().startsWith('#import "@local/typst-pdf-notebook:0.3.3": *'));
+  assert.ok(oldDoc.getText().startsWith(`#import "${PACKAGE_IMPORT}": *`));
   assert.ok(oldDoc.getText().endsWith('OLD NOTE BODY\n\nUNSAVED USER TEXT'));
   assert.equal(fs.readFileSync(oldEntry, 'utf8'), oldSource);
   assert.equal(oldDoc.isDirty, true);

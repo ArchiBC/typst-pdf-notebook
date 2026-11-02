@@ -3,12 +3,21 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { PDFDocument, PDFName, PDFDict, PDFArray, PDFHexString, degrees } = require('pdf-lib');
+const {
+  PDFDocument,
+  PDFName,
+  PDFDict,
+  PDFArray,
+  PDFHexString,
+  PDFString,
+  degrees,
+} = require('pdf-lib');
 const { loadBook, planNotebook, exportNotebook } = require('../src/document.cjs');
 const { NotebookCompiler } = require('../src/compiler.cjs');
 const { assertExportTarget } = require('../src/paths.cjs');
 const { installTemplate, PACKAGE_IMPORT, notebookSource } = require('../src/template.cjs');
 const { nativeOptions } = require('./support/environment.cjs');
+const { pageFingerprint, commentSnippet, clipSnippet } = require('../src/references.cjs');
 
 async function fixture(t) {
   const parent = path.resolve(__dirname, '../output/test-runs');
@@ -553,6 +562,169 @@ test('closing the compiler during export rejects pending work without a broken-p
   await assert.rejects(pending, /已关闭/);
   f.compiler.update(f.entry, f.main);
   f.compiler.dispose();
+});
+
+test('a Typst comment survives an unsynced PDF highlight and a changed edition keeps its note', async (t) => {
+  const f = await fixture(t),
+    clean = f.book;
+  const markedDoc = await PDFDocument.load(clean.bytes),
+    source = markedDoc.getPage(0);
+  const annotation = markedDoc.context.obj({
+    Type: 'Annot',
+    Subtype: 'Highlight',
+    Rect: [30, 392, 125, 417],
+    QuadPoints: [30, 417, 125, 417, 30, 392, 125, 392],
+    C: [1, 1, 0],
+  });
+  source.node.addAnnot(markedDoc.context.register(annotation));
+  const marked = await loadBook(await markedDoc.save());
+  const entry = `#import "${PACKAGE_IMPORT}": *\n#show: notebook.with(pdf:"book.pdf",size:(300pt,450pt))\n#sidenote("Chapter")\nUSER SIDE BODY\n`;
+  const signature = pageFingerprint(marked, 1);
+  const snippet = commentSnippet({
+    id: 'one',
+    page: 1,
+    fingerprint: signature,
+    after: 'Chapter',
+    excerpt: 'SOURCE ONE',
+    comment: 'My answer # [literal]',
+    areas: [[0.1, 33 / 450, 125 / 300, 58 / 450]],
+  });
+  f.compiler.update(f.entry, entry + snippet);
+  const r = await compile(f);
+  assert.equal(r.plan.rows[0].kind, 'side');
+  assert.equal(r.plan.noteCount, 1, 'append to the existing bookmark-anchored note');
+  assert.equal(r.plan.highlights[0].stale, false, 'file with no PDF annotation still resolves');
+  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  for (const book of [clean, marked]) {
+    const plan = planNotebook(book, r.notes, r.metadata);
+    const merged = await exportNotebook(book, r.notes, plan);
+    const pdf = await getDocument({ data: new Uint8Array(merged), verbosity: 0 }).promise;
+    try {
+      const p = await pdf.getPage(1),
+        annotations = await p.getAnnotations();
+      assert.equal(
+        annotations.filter((a) => a.subtype === 'Highlight').length,
+        1,
+        'restore or reuse the original highlight',
+      );
+      assert.ok(
+        annotations.some(
+          (a) =>
+            a.dest?.[1]?.name === 'XYZ' &&
+            Math.abs(a.dest[2] - 30) < 0.01 &&
+            Math.abs(a.dest[3] - 417) < 0.01,
+        ),
+        'the quote links to the marked passage',
+      );
+      const text = (await p.getTextContent()).items
+        .map((i) => i.str)
+        .join('')
+        .replace(/\s/g, '');
+      assert.match(text, /USERSIDEBODY/);
+      assert.match(text, /Myanswer#\[literal\]/);
+    } finally {
+      await pdf.loadingTask.destroy();
+    }
+  }
+  const changedDoc = await PDFDocument.load(clean.bytes);
+  changedDoc.getPage(0).drawText('Revised exercise', { x: 5, y: 10 });
+  const changed = await loadBook(await changedDoc.save()),
+    plan = planNotebook(changed, r.notes, r.metadata);
+  assert.equal(plan.highlights[0].stale, true);
+  const output = await getDocument({
+    data: new Uint8Array(await exportNotebook(changed, r.notes, plan)),
+    verbosity: 0,
+  }).promise;
+  try {
+    const p = await output.getPage(1);
+    assert.equal((await p.getAnnotations()).filter((a) => a.subtype === 'Highlight').length, 0);
+    assert.match(
+      (await p.getTextContent()).items
+        .map((i) => i.str)
+        .join('')
+        .replace(/\s/g, ''),
+      /Myanswer/,
+    );
+  } finally {
+    await output.loadingTask.destroy();
+  }
+  f.book = changed;
+  f.compiler.update(
+    f.entry,
+    entry +
+      snippet +
+      commentSnippet({
+        id: 'one',
+        page: 2,
+        excerpt: 'SOURCE TWO',
+        areas: [[0.08, 0.07, 0.48, 0.13]],
+        fingerprint: pageFingerprint(changed, 2),
+        reanchor: true,
+      }),
+  );
+  const repaired = await compile(f);
+  assert.equal(repaired.plan.highlights.length, 1, 'rebinding preserves the annotation identity');
+  assert.equal(repaired.plan.highlights[0].page, 2);
+  assert.equal(repaired.plan.highlights[0].stale, false);
+  const repairedPdf = await getDocument({ data: new Uint8Array(repaired.bytes), verbosity: 0 })
+    .promise;
+  try {
+    const p = await repairedPdf.getPage(repaired.plan.highlights[0].notePage);
+    assert.match(
+      (await p.getTextContent()).items
+        .map((i) => i.str)
+        .join('')
+        .replace(/\s/g, ''),
+      /Myanswer#\[literal\]/,
+    );
+  } finally {
+    await repairedPdf.loadingTask.destroy();
+  }
+  assert.deepEqual(fs.readFileSync(path.join(f.root, 'book.pdf')), Buffer.from(clean.bytes));
+});
+
+test('changing PDF literal strings to hexadecimal leaves the page anchor intact', async () => {
+  const doc = await PDFDocument.create(),
+    p = doc.addPage([300, 450]);
+  p.drawText('Same page');
+  const span = doc.context.obj({ ActualText: PDFString.of('same bytes') });
+  p.node.Resources().set(PDFName.of('Properties'), doc.context.obj({ Span: span }));
+  const original = await loadBook(await doc.save());
+  span.set(PDFName.of('ActualText'), PDFHexString.of(Buffer.from('same bytes').toString('hex')));
+  const reencoded = await loadBook(await doc.save());
+  assert.equal(pageFingerprint(original, 1), pageFingerprint(reencoded, 1));
+  span.set(PDFName.of('ActualText'), PDFString.of('different'));
+  assert.notEqual(
+    pageFingerprint(original, 1),
+    pageFingerprint(await loadBook(await doc.save()), 1),
+  );
+});
+
+test('a clip pasted into an included Typst file embeds the selected source PDF as vector content', async (t) => {
+  const f = await fixture(t);
+  const sub = path.join(f.root, 'notes');
+  fs.mkdirSync(sub);
+  fs.writeFileSync(
+    path.join(sub, 'excerpt.typ'),
+    clipSnippet('/book.pdf', 2, f.book.sizes[1], [0.05, 0.035, 0.8, 0.16]),
+  );
+  f.compiler.update(
+    f.entry,
+    `#import "${PACKAGE_IMPORT}": *\n#show: notebook.with(pdf:"book.pdf",size:(300pt,450pt))\n#note(2)\n#include "notes/excerpt.typ"\n\nMY SOLUTION\n`,
+  );
+  const r = await compile(f);
+  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const pdf = await getDocument({ data: new Uint8Array(r.bytes), verbosity: 0 }).promise;
+  try {
+    const text = (await (await pdf.getPage(1)).getTextContent()).items
+      .map((i) => i.str)
+      .join('')
+      .replace(/\s/g, '');
+    assert.match(text, /SOURCETWO/);
+    assert.match(text, /MYSOLUTION/);
+  } finally {
+    await pdf.loadingTask.destroy();
+  }
 });
 
 test('a right note replaces one source page and retains mixed bookmark and inserted notes', async (t) => {

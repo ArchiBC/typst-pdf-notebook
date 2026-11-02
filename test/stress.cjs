@@ -13,6 +13,7 @@ const { loadBook, planNotebook, exportNotebook } = require('../src/document.cjs'
 const { installTemplate, PACKAGE_IMPORT } = require('../src/template.cjs');
 const { nativeOptions } = require('./support/environment.cjs');
 const { createBook } = require('./support/book.cjs');
+const { addFixtureHighlight, checkReferenceTools } = require('./support/reference-tools.cjs');
 
 const project = path.resolve(__dirname, '..');
 const label = process.argv[2] || 'current';
@@ -140,6 +141,10 @@ async function main() {
   const originalPath = sourcePath || path.join(fixture, 'book.pdf');
   if (!sourcePath) await createBook(originalPath);
   let originalBook = await loadBook(await fs.readFile(originalPath));
+  if (!sourcePath) {
+    addFixtureHighlight(originalBook.doc);
+    originalBook = await loadBook(await originalBook.doc.save());
+  }
   if (rotation) {
     const rotated = await PDFDocument.load(originalBook.bytes);
     rotated.getPage(0).setRotation(degrees(rotation));
@@ -525,6 +530,7 @@ async function main() {
             width: paper.width,
             x: (x - paper.left) / paper.width,
             y: (y - paper.top) / paper.height,
+            zoomLabel: document.querySelector('#zoom').selectedOptions[0]?.textContent,
             scrollTop: viewer.scrollTop,
             events: window.__wheelEvents,
           };
@@ -542,6 +548,13 @@ async function main() {
       );
       const enlarged = await wheelState();
       assert.ok(enlarged.events.some((event) => event.ctrl && event.prevented));
+      const checkZoomLabel = (state) => {
+        assert.match(state.zoomLabel || '', /^\d+(\.\d)?%$/);
+        assert.ok(
+          Math.abs(parseFloat(state.zoomLabel) - (state.width / beforeWheel.width) * 100) < 0.06,
+        );
+      };
+      checkZoomLabel(enlarged);
       assert.ok(
         Math.abs(enlarged.x - beforeWheel.x) < 0.003,
         `wheel zoom keeps the horizontal anchor: ${JSON.stringify({ beforeWheel, enlarged })}`,
@@ -562,6 +575,7 @@ async function main() {
         beforeWheel.width,
       );
       const restored = await wheelState();
+      assert.equal(restored.zoomLabel, '100%');
       await page.mouse.wheel(0, 160);
       await page.waitForFunction(
         (top) => document.querySelector('#viewer').scrollTop > top,
@@ -664,6 +678,7 @@ async function main() {
       await page.mouse.wheel(0, -100);
       await page.waitForTimeout(350);
       const fitEnlarged = await wheelState();
+      checkZoomLabel(fitEnlarged);
       assert.ok(
         fitEnlarged.width > fit.width * 1.04,
         `small fit wheel must enlarge: ${JSON.stringify({ fit, fitEnlarged })}`,
@@ -796,6 +811,7 @@ async function main() {
       await page.setViewportSize({ width: 1440, height: 1000 });
       await page.waitForTimeout(250);
       await page.screenshot({ path: path.join(output, `performance-${label}.png`) });
+      if (!sourcePath && !rotation) await checkReferenceTools(page);
     }
     if (name === 'side') {
       await page.evaluate(() => {

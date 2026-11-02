@@ -7,6 +7,7 @@ const { PDFDocument } = require('pdf-lib');
 const { NotebookCompiler } = require('./compiler.cjs');
 const { loadBook, planNotebook, exportNotebook } = require('./document.cjs');
 const { assertExportTarget } = require('./paths.cjs');
+const { validAreas, clipSnippet, commentSnippet, pageFingerprint } = require('./references.cjs');
 const { notebookSource, templateUpgradeEdits } = require('./template.cjs');
 const { TINYMIST_ID, TemplateBridge, resolveEngine } = require('./tinymist.cjs');
 
@@ -207,10 +208,9 @@ class NotebookSession {
           const bookPath = path.resolve(path.dirname(this.entry), config.pdf);
           if (!inside(this.root, bookPath)) throw Error('原书 PDF 请放在当前工作区内。');
           if (!this.book || this.bookPath !== bookPath) {
-            const stat = await fs.stat(bookPath);
             this.book = await loadBook(await fs.readFile(bookPath));
             this.bookPath = bookPath;
-            this.bookVersion = `${stat.size}-${stat.mtimeMs}`;
+            this.bookVersion = crypto.createHash('sha256').update(this.book.bytes).digest('hex');
           }
           compiled = await this.compiler.compile({ book: this.book, snapshot: compiled });
           const notes =
@@ -276,6 +276,8 @@ class NotebookSession {
       outline: plan.outline,
       title: plan.config.title,
       noteCount: plan.noteCount,
+      highlights: plan.highlights,
+      commentTemplate: plan.config.comments === 1,
       revision,
       error: this.lastError ? this.errorMessage(this.lastError) : null,
     });
@@ -327,7 +329,14 @@ class NotebookSession {
           Number.isFinite(msg.y)
         )
           this.compiler.inverse(msg.page, msg.x, msg.y);
-        else if (msg.type === 'export') await this.export();
+        else if (msg.type === 'clip-reference' || msg.type === 'save-comment') {
+          try {
+            const text = await this.writeReference(msg);
+            this.post({ type: 'reference-result', request: msg.request, text });
+          } catch (e) {
+            this.post({ type: 'reference-result', request: msg.request, error: e.message });
+          }
+        } else if (msg.type === 'export') await this.export();
         else if (msg.type === 'upgrade-template') {
           if (
             await vscode.commands.executeCommand(
@@ -350,6 +359,107 @@ class NotebookSession {
     });
     this.panel.webview.html = await this.html(this.panel.webview);
     this.publish();
+  }
+  async writeReference(msg, clipboard = vscode.env.clipboard) {
+    const book = this.book;
+    if (
+      msg.type === 'save-comment' &&
+      (this.wanted || this.refreshing || this.snapshot?.revision !== this.revision)
+    )
+      await this.refresh();
+    const snapshot = this.snapshot;
+    const current = () =>
+      !this.disposed &&
+      book &&
+      this.book === book &&
+      msg.bookVersion === this.bookVersion &&
+      msg.bookUrl === this.panel?.webview.asWebviewUri(vscode.Uri.file(this.bookPath)).toString();
+    if (!current() || !snapshot) throw Error('原书已更新，请重新选择原文。');
+    if (
+      !Number.isInteger(msg.page) ||
+      msg.page < 1 ||
+      msg.page > book.pageCount ||
+      !validAreas(msg.areas)
+    )
+      throw Error('请选择同一原书页内的内容。');
+    if (msg.type === 'clip-reference') {
+      if (msg.areas.length !== 1) throw Error('框选引用需要一个矩形。');
+      const file = '/' + path.relative(this.root, this.bookPath).split(path.sep).join('/');
+      await clipboard.writeText(
+        clipSnippet(file, msg.page, book.sizes[msg.page - 1], msg.areas[0]),
+      );
+      return `已复制原书第 ${msg.page} 页的选区引用，可粘贴到 Typst。`;
+    }
+    if (
+      typeof msg.excerpt !== 'string' ||
+      !msg.excerpt.trim() ||
+      msg.excerpt.length > 24000 ||
+      typeof msg.comment !== 'string' ||
+      msg.comment.length > 32000
+    )
+      throw Error('选文或注释太长，请分段添加。');
+    if (this.writingComment) throw Error('上一条注释正在写入，请稍后重试。');
+    if (
+      msg.reanchor != null &&
+      !snapshot.plan.highlights.some((m) => m.stale && m.id === msg.reanchor)
+    )
+      throw Error('这条注释的位置已更新，请重新打开引用。');
+    this.writingComment = true;
+    try {
+      const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(this.entry));
+      const edit = new vscode.WorkspaceEdit();
+      if (!snapshot.plan.config.comments) {
+        const owner = await this.commentTemplateOwner(doc);
+        if (!owner) throw Error('请先在定义 notebook 的文件中执行“升级笔记模板”，再保存这条注释。');
+        const [item] = templateUpgradeEdits(owner.getText());
+        edit.replace(
+          owner.uri,
+          new vscode.Range(owner.positionAt(item.start), owner.positionAt(item.end)),
+          item.text,
+        );
+      }
+      if (!current()) throw Error('原书已更新，请重新选择原文。');
+      const side = snapshot.plan.blocks.find(
+        (n) => n.after === msg.page && n.requestedPlacement === 'right',
+      );
+      const anchor =
+        side && snapshot.metadata.find((n) => n.kind === 'pdf-note' && n.id === side.id)?.after;
+      const snippet = commentSnippet({
+        id: msg.reanchor ?? crypto.randomUUID(),
+        reanchor: msg.reanchor != null,
+        page: msg.page,
+        excerpt: msg.excerpt.trim(),
+        areas: msg.areas,
+        comment: msg.comment,
+        after: anchor,
+        fingerprint: pageFingerprint(book, msg.page),
+      });
+      edit.insert(doc.uri, doc.positionAt(doc.getText().length), snippet);
+      if (!(await vscode.workspace.applyEdit(edit))) throw Error('笔记已被编辑，请重试。');
+      return msg.reanchor
+        ? `引用已重新关联至原书第 ${msg.page} 页。`
+        : `注释已加入第 ${msg.page} 页的笔记。保存 Typst 文件即可同步。`;
+    } finally {
+      this.writingComment = false;
+    }
+  }
+  async commentTemplateOwner(doc, seen = new Set()) {
+    if (seen.has(doc.uri.fsPath) || seen.size >= 20) return;
+    seen.add(doc.uri.fsPath);
+    const source = doc.getText();
+    if (templateUpgradeEdits(source).length) return doc;
+    const owners = new Set();
+    const prelude = source.split(/^\s*#(?:note|sidenote)\s*\(/m)[0];
+    for (const match of prelude.matchAll(/^\s*#import\s+"([^"\r\n]+\.typ)"/gm)) {
+      const file = match[1].startsWith('/')
+        ? path.join(this.root, match[1])
+        : path.resolve(path.dirname(doc.uri.fsPath), match[1]);
+      if (!inside(this.root, file)) continue;
+      const child = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
+      const owner = await this.commentTemplateOwner(child, seen);
+      if (owner) owners.add(owner);
+    }
+    return owners.size === 1 ? [...owners][0] : undefined;
   }
   async html(webview) {
     let html = await fs.readFile(path.join(this.context.extensionPath, 'media/index.html'), 'utf8');

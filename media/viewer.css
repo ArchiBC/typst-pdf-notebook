@@ -163,6 +163,89 @@ aside h2 {
   position: absolute;
   overflow: hidden;
 }
+#clip-tool {
+  white-space: nowrap;
+}
+#clip-tool[aria-pressed='true'] {
+  background: var(--accent);
+  color: white;
+}
+#viewer.clipping .page-part[data-kind='source'],
+#viewer.clipping .page-part[data-kind='source'] * {
+  cursor: crosshair;
+  user-select: none;
+}
+.source-marks,
+.clip-box,
+.source-marks > span {
+  position: absolute;
+  pointer-events: none;
+}
+.source-marks {
+  inset: 0;
+  z-index: 1;
+  mix-blend-mode: multiply;
+}
+.source-marks > span {
+  background: rgb(255 215 42 / 48%);
+}
+.clip-box {
+  border: 1px solid #23798c;
+  background: #36a7bb30;
+  z-index: 5;
+}
+#selection-actions,
+#comment-card {
+  position: fixed;
+  z-index: 10;
+  max-width: calc(100vw - 12px);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 2px 12px #0004;
+  background: var(--background);
+  color: var(--ink);
+}
+#selection-actions {
+  padding: 3px;
+}
+#comment-card {
+  width: 294px;
+  padding: 12px;
+  border-top: 3px solid #d6ab3b;
+}
+#comment-excerpt {
+  border-left: 2px solid #d6ab3b;
+  margin: 8px 0;
+  padding-left: 8px;
+  font-size: 12px;
+  max-height: 4.5em;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+#comment-body {
+  width: 100%;
+  min-height: 72px;
+  max-height: 24vh;
+  resize: vertical;
+  font: inherit;
+  padding: 6px;
+  color: var(--ink);
+  background: var(--background);
+  border: 1px solid var(--border);
+}
+.comment-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+}
+#save-comment {
+  background: var(--accent);
+  color: white;
+}
+#comment-error {
+  color: var(--vscode-errorForeground, #c12d42);
+}
 .text-shell {
   position: absolute;
   inset: 0;
@@ -255,6 +338,22 @@ footer.error {
   }
   footer > span:last-child {
     display: none;
+  }
+}
+@media (max-width: 480px) {
+  header {
+    flex-wrap: wrap;
+    row-gap: 3px;
+  }
+  header .spacer {
+    display: none;
+  }
+  header button,
+  header select {
+    padding-inline: 5px;
+  }
+  #page {
+    width: 45px;
   }
 }
 @media (max-width: 480px) {

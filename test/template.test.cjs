@@ -69,7 +69,7 @@ test('bundled package installs idempotently and refuses to overwrite user change
   assert.equal(installed.import, PACKAGE_IMPORT);
   const manifest = await fs.readFile(path.join(installed.target, 'typst.toml'), 'utf8');
   assert.match(manifest, /name = "typst-pdf-notebook"/);
-  assert.match(manifest, /version = "0\.3\.3"/);
+  assert.ok(manifest.includes(`version = "${PACKAGE_VERSION}"`));
   assert.ok(
     (await fs.readFile(path.join(installed.target, 'math.typ'), 'utf8')).includes(
       'chengsi/template.typ',
@@ -101,6 +101,11 @@ test('bundled package installs idempotently and refuses to overwrite user change
     assert.deepEqual(
       await fs.readFile(path.join(installed.legacyTargets[3], name)),
       await fs.readFile(path.join(extension, 'templates/legacy/0.3.2', name)),
+    );
+  for (const name of ['notebook.typ', 'math.typ', 'typst.toml'])
+    assert.deepEqual(
+      await fs.readFile(path.join(installed.legacyTargets[4], name)),
+      await fs.readFile(path.join(extension, 'templates/legacy/0.3.3', name)),
     );
   const source = path.join(installed.target, 'notebook.typ');
   const mtime = (await fs.stat(source)).mtimeMs;

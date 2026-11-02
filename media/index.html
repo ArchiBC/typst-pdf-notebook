@@ -23,8 +23,11 @@
         <option value="1">100%</option>
         <option value="1.25">125%</option>
         <option value="1.5">150%</option>
-        <option value="2">200%</option></select
-      ><button id="zoom-in" aria-label="放大">+</button><button id="export">导出 PDF</button>
+        <option value="2">200%</option>
+        <option id="custom-zoom" hidden></option></select
+      ><button id="zoom-in" aria-label="放大">+</button>
+      <button id="clip-tool" aria-pressed="false" title="拖框复制原书选区的 Typst 引用">框选</button
+      ><button id="export">导出 PDF</button>
     </header>
     <main>
       <aside id="sidebar">
@@ -46,6 +49,24 @@
         <div id="empty">正在加载笔记与原书…</div>
       </section>
     </main>
+    <div id="selection-actions" hidden>
+      <button id="write-comment" type="button">写侧页注释</button>
+    </div>
+    <form id="comment-card" role="dialog" aria-label="侧页注释" hidden>
+      <strong id="comment-title">侧页注释</strong>
+      <blockquote id="comment-excerpt"></blockquote>
+      <textarea
+        id="comment-body"
+        aria-label="注释正文"
+        placeholder="写下你的想法…"
+        maxlength="32000"
+      ></textarea>
+      <div id="comment-error" role="alert"></div>
+      <div class="comment-buttons">
+        <button type="button" id="cancel-comment">取消</button>
+        <button type="submit" id="save-comment">加入笔记</button>
+      </div>
+    </form>
     <footer>
       <span id="status" role="status">正在连接…</span><span class="spacer"></span
       ><span>笔记 Ctrl + 单击返回源码</span>

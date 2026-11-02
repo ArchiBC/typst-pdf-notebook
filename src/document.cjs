@@ -8,6 +8,7 @@ const {
   PDFHexString,
   degrees,
 } = require('pdf-lib');
+const { notebookHighlights, addPdfHighlights, pdfPoint } = require('./references.cjs');
 
 function object(doc, value) {
   return value instanceof PDFRef ? doc.context.lookup(value) : value;
@@ -144,7 +145,10 @@ function planNotebook(book, notes, metadata) {
       ...n,
       placement,
       requestedPlacement: n.requestedPlacement ?? placement,
-      after: resolve(n.after),
+      after:
+        n.commentPage && Number.isInteger(n.after)
+          ? Math.min(n.after, book.pageCount)
+          : resolve(n.after),
       first: n.page,
       last: end,
     };
@@ -227,7 +231,16 @@ function planNotebook(book, notes, metadata) {
       order: marks.length + i,
     })),
   ].sort((a, b) => a.outputPage - b.outputPage || a.order - b.order);
-  return { config, rows, blocks, outline, sourceToOutput, notesToOutput, noteCount: blocks.length };
+  return {
+    config,
+    rows,
+    blocks,
+    outline,
+    sourceToOutput,
+    notesToOutput,
+    noteCount: blocks.length,
+    highlights: notebookHighlights(book, metadata),
+  };
 }
 
 function writeOutline(doc, items) {
@@ -285,7 +298,15 @@ function writeOutline(doc, items) {
   doc.catalog.set(PDFName.of('Outlines'), rootRef);
 }
 
-function rewriteLinks(source, copies, output, destination, toOutput, sourceToOutput = toOutput) {
+function rewriteLinks(
+  source,
+  copies,
+  output,
+  destination,
+  toOutput,
+  sourceToOutput = toOutput,
+  marks,
+) {
   for (let p = 0; p < copies.length; p++) {
     const original = source.getPage(p).node.lookupMaybe(PDFName.of('Annots'), PDFArray);
     const copied = copies[p].node.lookupMaybe(PDFName.of('Annots'), PDFArray);
@@ -295,9 +316,15 @@ function rewriteLinks(source, copies, output, destination, toOutput, sourceToOut
         dst = object(output, copied.get(i));
       if (!(src instanceof PDFDict) || !(dst instanceof PDFDict)) continue;
       const action = src.lookupMaybe(PDFName.of('A'), PDFDict);
-      const sourceLink = /^pdf-notebook-source:(\d+)$/.exec(
-        text(action?.lookupMaybe(PDFName.of('URI'), PDFString, PDFHexString)),
-      );
+      const uri = text(action?.lookupMaybe(PDFName.of('URI'), PDFString, PDFHexString));
+      const markId = /^pdf-notebook-mark:([\w-]+)$/.exec(uri)?.[1];
+      if (markId && marks) {
+        const dest = marks.get(markId);
+        dst.delete(PDFName.of('A'));
+        if (dest) dst.set(PDFName.of('Dest'), output.context.obj(dest));
+        continue;
+      }
+      const sourceLink = /^pdf-notebook-source:(\d+)$/.exec(uri);
       if (sourceLink && sourceToOutput[sourceLink[1]]) {
         dst.delete(PDFName.of('A'));
         dst.set(
@@ -393,7 +420,29 @@ async function exportNotebook(book, notes, plan) {
   const result = await PDFDocument.create();
   const source = await result.copyPages(book.doc, book.doc.getPageIndices());
   const inserts = plan.blocks.length ? await result.copyPages(notes, notes.getPageIndices()) : [];
+  const destinations = new Map();
+  const byPage = new Map();
+  for (const mark of plan.highlights || [])
+    if (!mark.stale) {
+      if (!byPage.has(mark.page)) byPage.set(mark.page, []);
+      byPage.get(mark.page).push(mark);
+    }
   for (const row of plan.rows) {
+    if (row.kind !== 'note' && byPage.has(row.page)) {
+      const page = source[row.page - 1],
+        box = visibleBox(page),
+        marks = byPage.get(row.page);
+      addPdfHighlights(result, page, box, marks);
+      for (const mark of marks) {
+        const [u, v] = mark.areas[0],
+          part = row.parts[0];
+        const [x, y] =
+          row.kind === 'side'
+            ? [part.width * u, row.height - part.height * v]
+            : pdfPoint(page, box, u, v);
+        destinations.set(mark.id, [page.ref, 'XYZ', x, y, null]);
+      }
+    }
     if (row.kind !== 'side') {
       result.addPage((row.kind === 'source' ? source : inserts)[row.page - 1]);
       continue;
@@ -414,7 +463,15 @@ async function exportNotebook(book, notes, plan) {
   result.setCreator('Typst PDF Notebook');
   rewriteLinks(book.doc, source, result, book.destination, plan.sourceToOutput);
   const noteDest = readBookmarks(notes).destination;
-  rewriteLinks(notes, inserts, result, noteDest, plan.notesToOutput, plan.sourceToOutput);
+  rewriteLinks(
+    notes,
+    inserts,
+    result,
+    noteDest,
+    plan.notesToOutput,
+    plan.sourceToOutput,
+    destinations,
+  );
   writeOutline(result, plan.outline);
   return result.save();
 }
