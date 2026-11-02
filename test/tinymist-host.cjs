@@ -56,6 +56,7 @@ async function run() {
     JSON.stringify(
       {
         vscode: vscode.version,
+        runtime: process.versions,
         extensionVersion: extension.packageJSON.version,
         relativePackagePath: true,
         editorConfigurationMatches: true,

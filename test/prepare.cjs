@@ -34,10 +34,13 @@ async function prepare() {
   await fs.mkdir(output, { recursive: true });
   const cache = path.resolve(process.env.NOTEBOOK_TEST_CACHE || path.join(output, 'test-cache'));
   await fs.mkdir(cache, { recursive: true });
+  const requestedVersion = process.env.NOTEBOOK_VSCODE_VERSION || 'stable';
+  const version =
+    requestedVersion === 'minimum' ? manifest.engines.vscode.replace(/^\^/, '') : requestedVersion;
   const code =
     process.env.NOTEBOOK_CODE_BIN ||
     (await downloadAndUnzipVSCode({
-      version: process.env.NOTEBOOK_VSCODE_VERSION || 'stable',
+      version,
       cachePath: path.join(cache, 'vscode'),
     }));
   const vsix = path.resolve(

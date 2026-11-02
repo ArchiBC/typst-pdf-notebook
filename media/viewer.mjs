@@ -69,6 +69,8 @@ function report() {
   host.postMessage({
     type: 'diagnostics',
     value: {
+      userAgent: navigator.userAgent,
+      pdfjsVersion: pdfjs.version,
       totalPages: plan.length,
       canvases: pages.querySelectorAll('.paper canvas').length,
       renderedPages: rendered.size,

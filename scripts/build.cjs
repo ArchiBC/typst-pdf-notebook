@@ -17,6 +17,8 @@ async function build() {
   const library = path.dirname(require.resolve('pdfjs-dist/package.json'));
   const vendor = path.join(root, 'vendor/pdfjs');
   fs.mkdirSync(vendor, { recursive: true });
+  // Keep the API, worker and stylesheet on PDF.js's polyfilled legacy build.
+  // The modern build requires browser features missing in older VS Code webviews.
   for (const name of [
     'build/pdf.mjs',
     'build/pdf.worker.mjs',
@@ -28,7 +30,8 @@ async function build() {
   ]) {
     const dest = path.join(vendor, name);
     fs.mkdirSync(path.dirname(dest), { recursive: true });
-    fs.cpSync(path.join(library, name), dest, { recursive: true });
+    const source = name.startsWith('build/') || name.startsWith('web/') ? 'legacy/' + name : name;
+    fs.cpSync(path.join(library, source), dest, { recursive: true });
   }
   fs.copyFileSync(
     path.join(root, 'node_modules/pdf-lib/LICENSE.md'),

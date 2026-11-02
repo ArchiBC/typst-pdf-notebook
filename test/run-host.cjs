@@ -12,6 +12,11 @@ async function runCase(prepared, startup) {
   const root = await fs.mkdtemp(path.join(output, 'host-workspace-'));
   // macOS Unix sockets cannot use long repository-relative profile paths.
   const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'tpn-host-'));
+  await fs.mkdir(path.join(profile, 'User'));
+  await fs.writeFile(
+    path.join(profile, 'User/settings.json'),
+    JSON.stringify({ 'extensions.autoUpdate': false, 'extensions.autoCheckUpdates': false }),
+  );
   await createHostFixture(root);
   await fs.mkdir(path.join(root, '.vscode'));
   await fs.writeFile(

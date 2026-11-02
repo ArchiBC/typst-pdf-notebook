@@ -245,6 +245,7 @@ async function run() {
   assert.ok(session.viewerDiagnostics.canvases <= 8);
   const evidence = {
     vscode: vscode.version,
+    runtime: process.versions,
     extensionVersion: extension.packageJSON.version,
     extensionPath: extension.extensionPath,
     initial: session.viewerDiagnostics,

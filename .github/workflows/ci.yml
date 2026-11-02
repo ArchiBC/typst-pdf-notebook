@@ -31,8 +31,11 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
+        vscode: [minimum, stable]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
+    env:
+      NOTEBOOK_VSCODE_VERSION: ${{ matrix.vscode }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -57,7 +60,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: evidence-${{ matrix.os }}
+          name: evidence-${{ matrix.os }}-${{ matrix.vscode }}
           path: |
             output/test-env.json
             output/extension-host-evidence.json
