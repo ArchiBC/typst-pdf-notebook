@@ -144,28 +144,38 @@ class NotebookSession {
   }
   async reconfigure() {
     if (this.disposed) return;
-    if (this.configurationPromise) {
-      this.configureAgain = true;
-      return this.configurationPromise;
-    }
     this.reconfiguring = true;
     this.revision++;
     clearTimeout(this.timer);
     clearTimeout(this.followTimer);
+    if (this.configurationPromise) {
+      this.configureAgain = true;
+      return this.configurationPromise;
+    }
     this.configurationPromise = (async () => {
-      await this.refreshing?.catch(() => {});
-      do {
-        this.configureAgain = false;
-        this.compiler?.dispose();
-        if (this.disposed) return;
-        await this.startCompiler();
-      } while (this.configureAgain && !this.disposed);
-      this.reconfiguring = false;
-      if (!this.disposed) await this.refresh();
-    })().finally(() => {
-      this.reconfiguring = false;
-      this.configurationPromise = null;
-    });
+      try {
+        await this.refreshing?.catch(() => {});
+        do {
+          this.configureAgain = false;
+          this.reconfiguring = true;
+          try {
+            this.compiler?.dispose();
+            if (this.disposed) return;
+            await this.startCompiler();
+            if (this.configureAgain && !this.disposed) continue;
+            this.reconfiguring = false;
+            if (!this.disposed) await this.refresh();
+          } catch (error) {
+            if (!this.configureAgain || this.disposed) throw error;
+          }
+          // A setting can change while the new compiler's first preview is
+          // rendering. Keep that refresh inside the loop so the update is kept.
+        } while (this.configureAgain && !this.disposed);
+      } finally {
+        this.reconfiguring = false;
+        this.configurationPromise = null;
+      }
+    })();
     return this.configurationPromise;
   }
   schedule() {
