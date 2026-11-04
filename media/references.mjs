@@ -1,3 +1,5 @@
+import { underlineBands } from './underlines.mjs';
+
 const $ = (id) => document.getElementById(id);
 const sourcePart = (node) =>
   (node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement)?.closest(
@@ -150,23 +152,55 @@ export function setupReferences({ viewer, send, status, openNote, openSource }) 
     draft,
     drag,
     clipping = false,
+    style = 'underline',
     request = 0,
     pending;
   function paint(part) {
     part.querySelector('.source-marks')?.remove();
+    part.querySelector('.source-badges')?.remove();
     const saved = marks.filter((m) => !m.stale && m.page === part.pagePart.page);
     if (!card.hidden && !draft?.invalid && draft?.page === part.pagePart.page) saved.push(draft);
     const layer = document.createElement('div');
-    layer.className = 'source-marks';
+    layer.className = 'source-marks ' + style;
+    const badges = document.createElement('div');
+    badges.className = 'source-badges';
     for (const m of saved) {
-      if (part.nativeMarks?.some((native) => sameAreas(m.areas, native.areas))) continue;
-      for (const area of m.areas) {
-        const span = document.createElement('span');
-        drawBox(span, area);
-        layer.append(span);
+      const nativeStyle = style === 'highlight' ? 'Highlight' : 'Underline';
+      const areas =
+        style === 'underline'
+          ? underlineBands(m.areas, part.pagePart.width, part.pagePart.height)
+          : m.areas;
+      if (
+        !part.nativeMarks?.some(
+          (native) => native.style === nativeStyle && sameAreas(areas, native.areas),
+        )
+      )
+        for (const area of areas) {
+          const span = document.createElement('span');
+          if (m.id) span.dataset.reference = m.id;
+          drawBox(span, area);
+          layer.append(span);
+        }
+      if (Number.isInteger(m.number) && m.number > 0) {
+        const badge = document.createElement('button');
+        const [, top, right] = m.areas.at(-1);
+        badge.type = 'button';
+        badge.className = 'source-badge';
+        badge.dataset.reference = m.id;
+        badge.textContent = String(m.number);
+        badge.title = badge.ariaLabel = '查看注释 ' + m.number;
+        badge.style.left = Math.min(right, 0.98) * 100 + '%';
+        badge.style.top = Math.max(top, 0.01) * 100 + '%';
+        badge.onclick = (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!clipping && !pending && card.hidden) openNote(m);
+        };
+        badges.append(badge);
       }
     }
     if (layer.childElementCount) part.append(layer);
+    if (badges.childElementCount) part.append(badges);
   }
   function repaint() {
     for (const p of viewer.querySelectorAll('.page-part[data-kind="source"]')) paint(p);
@@ -175,7 +209,7 @@ export function setupReferences({ viewer, send, status, openNote, openSource }) 
     card.hidden = actions.hidden = true;
     draft = undefined;
     repair = retainedText = undefined;
-    $('write-comment').textContent = '写侧页注释';
+    $('write-comment').textContent = '写注释';
     input.value = '';
     $('comment-error').textContent = '';
     repaint();
@@ -185,7 +219,7 @@ export function setupReferences({ viewer, send, status, openNote, openSource }) 
     actions.hidden = true;
     card.hidden = false;
     $('comment-title').textContent =
-      `原书第 ${item.page} 页 · ${repair ? '重新关联引用' : '侧页注释'}`;
+      `原书第 ${item.page} 页 · ${repair ? '重新关联引用' : '添加注释'}`;
     $('comment-excerpt').textContent = repair
       ? `原选文：${repair.excerpt}\n新选文：${item.excerpt}`
       : item.excerpt;
@@ -220,6 +254,15 @@ export function setupReferences({ viewer, send, status, openNote, openSource }) 
     }
     send({ type, ...identity, ...fields, request });
   }
+  function setStyle(value) {
+    style = value === 'highlight' ? 'highlight' : 'underline';
+    $('annotation-style').value = style;
+    repaint();
+  }
+  $('annotation-style').onchange = (event) => {
+    setStyle(event.target.value);
+    send({ type: 'set-annotation-style', style });
+  };
   tool.onclick = () => {
     if (pending || !card.hidden) return;
     closeCard();
@@ -373,17 +416,21 @@ export function setupReferences({ viewer, send, status, openNote, openSource }) 
       identity = { bookUrl: message.bookUrl, bookVersion: message.bookVersion };
       commentTemplate = message.commentTemplate;
       marks = message.highlights || [];
-      repaint();
+      setStyle(message.annotationStyle);
     },
     annotations(part, list, viewport) {
       part.nativeMarks = list
-        .filter((a) => a.subtype === 'Highlight')
+        .filter((a) => a.subtype === 'Highlight' || a.subtype === 'Underline')
         .map((a) => ({
+          style: a.subtype,
           areas: nativeAreas(a, viewport),
           comment: a.contentsObj?.str || '',
         }))
         .filter((a) => a.areas.length);
       paint(part);
+    },
+    style(value) {
+      setStyle(value);
     },
     zoom() {
       if (drag) toggleClip(false);

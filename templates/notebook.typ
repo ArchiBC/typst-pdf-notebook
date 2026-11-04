@@ -39,18 +39,28 @@
   id: id, fingerprint: fingerprint, after: if after == auto { page } else { after },
 ))
 
-#let comment-body(c) = [
+// Short, editable comment bodies refer to anchors kept together in the same file.
+#let pdf-comment(page, id, ..body) = {
+  let positional = body.pos()
+  assert(positional.len() <= 1, message: "pdf-comment 最多接受一段正文。")
+  if positional.len() == 0 {
+    metadata((kind: "pdf-comment-start", page: page, id: id))
+  } else {
+    metadata((kind: "pdf-comment-input", page: page, id: id, body: positional.first()))
+  }
+}
+#let pdf-anchor = source-anchor
+
+#let comment-mark(c) = [
   #context {
     let pos = here().position()
     metadata((kind: "pdf-highlight", id: c.id, page: c.page, areas: c.areas,
-      excerpt: c.excerpt, fingerprint: c.fingerprint, notePage: here().page(),
+      excerpt: c.excerpt, fingerprint: c.fingerprint, number: c.number, notePage: here().page(),
       noteX: pos.x.pt(), noteY: pos.y.pt()))
   }
-  #block(inset: (left: 5pt), stroke: (left: 2pt + rgb("#d6ab3b")))[
-    #link("pdf-notebook-mark:" + c.id, text(c.excerpt))
-  ]
-  #c.body
+  #link("pdf-notebook-mark:" + c.id, super(text(size: 8pt, fill: rgb("#b83740"), str(c.number))))#h(0.25em)
 ]
+#let comment-body(c) = [#comment-mark(c)#c.body]
 
 #let invisible-heading(title, level) = {
   show heading: it => []
@@ -113,34 +123,84 @@
   let anchors = (:)
   let current = none
   let parts = ()
+  let pending = none
+  let comment-parts = ()
+  let after-inline = false
   for item in note-items(body) {
     let value = if item.func() == metadata and type(item.value) == dictionary { item.value } else { (:) }
     let kind = value.at("kind", default: none)
+    if ("pdf-note-start", "pdf-note-block", "pdf-comment-start", "pdf-comment-input").contains(kind) and pending != none {
+      comments.push((..pending, inline: false, body: comment-parts.fold([], (a, b) => a + b)))
+      pending = none
+      comment-parts = ()
+    }
     if kind == "pdf-note-start" or kind == "pdf-note-block" {
       if current != none {
         entries.push((..current, body: parts.fold([], (a, b) => a + b)))
       }
       current = none
       parts = ()
+      after-inline = false
       if kind == "pdf-note-start" {
         current = value.settings
       } else {
-        entries.push(value.note)
+        let block-parts = ()
+        let after-mark = false
+        for child in note-items(value.note.body) {
+          let mark = if child.func() == metadata and type(child.value) == dictionary { child.value } else { (:) }
+          if mark.at("kind", default: none) == "pdf-comment-start" {
+            comments.push((..mark, inline: true))
+            block-parts.push(metadata((kind: "pdf-comment-inline", id: mark.id)))
+            after-mark = true
+          } else if mark.at("kind", default: none) == "pdf-comment-anchor" {
+            anchors.insert(mark.id, mark)
+          } else if not after-mark or not note-whitespace(child) {
+            block-parts.push(child)
+            after-mark = false
+          }
+        }
+        entries.push((..value.note, body: block-parts.fold([], (a, b) => a + b)))
+      }
+    } else if kind == "pdf-comment-start" {
+      if current != none {
+        comments.push((..value, inline: true))
+        parts.push(metadata((kind: "pdf-comment-inline", id: value.id)))
+        after-inline = true
+      } else {
+        pending = value
       }
     } else if kind == "pdf-comment-input" {
-      comments.push(value)
+      comments.push((..value, inline: false))
     } else if kind == "pdf-comment-anchor" {
       anchors.insert(value.id, value)
     } else if current != none {
-      parts.push(item)
+      if not after-inline or not note-whitespace(item) {
+        parts.push(item)
+        after-inline = false
+      }
+    } else if pending != none {
+      if comment-parts.len() > 0 or not note-whitespace(item) { comment-parts.push(item) }
     } else {
       assert(note-whitespace(item), message: "请先写 #note(页码或书签)，然后直接写笔记正文。")
     }
   }
+  if pending != none {
+    comments.push((..pending, inline: false, body: comment-parts.fold([], (a, b) => a + b)))
+  }
   if current != none {
     entries.push((..current, body: parts.fold([], (a, b) => a + b)))
   }
-  (entries: entries, comments: comments.map(c => (: ..c, ..anchors.at(c.id, default: (:)))))
+  let numbered = ()
+  let numbers = (:)
+  for original in comments {
+    let c = (: ..original, ..anchors.at(original.id, default: (:)))
+    assert(c.at("areas", default: none) != none, message: "缺少引用定位数据，请保留笔记中的 PDF Notebook 数据。")
+    let key = str(c.page)
+    let number = numbers.at(key, default: 0) + 1
+    numbers.insert(key, number)
+    numbered.push((..c, number: number))
+  }
+  (entries: entries, comments: numbered)
 }
 
 #let notebook(
@@ -161,15 +221,25 @@
   let layout = json(bytes(sys.inputs.at("__pdf_notebook_layout", default: "{}")))
   let content = {
     // 插页与原书书签由插件处理；Typst 只排版笔记，不读取原 PDF。
-    metadata((kind: "pdf-notebook", version: 1, template: "chengsi", comments: 1, pdf: pdf,
+    metadata((kind: "pdf-notebook", version: 1, template: "chengsi", comments: 3, pdf: pdf,
       title: title, bookmarks: bookmarks, sideLayout: 1, noteLayout: layout))
     let prepare(raw) = (
       title: none, style: "blank", chrome: auto, id: none, placement: "after", width: auto, margin: auto,
       ..note-settings.at(str(raw.after), default: (:)), ..raw)
     let collected = collect-notes(body)
     let entries = collected.entries.filter(n =>
-      note-items(n.body).filter(item => not note-whitespace(item)).len() > 0).map(prepare)
-    for c in collected.comments {
+      note-items(n.body).filter(item => not note-whitespace(item)).len() > 0).map(raw => {
+        let items = note-items(raw.body).map(item => {
+          let value = if item.func() == metadata and type(item.value) == dictionary { item.value } else { (:) }
+          if value.at("kind", default: none) == "pdf-comment-inline" {
+            let index = collected.comments.position(c => c.id == value.id and c.inline)
+            assert(index != none, message: "找不到行内引用的定位数据。")
+            comment-mark(collected.comments.at(index))
+          } else { item }
+        })
+        prepare((..raw, body: items.fold([], (a, b) => a + b)))
+      })
+    for c in collected.comments.filter(c => not c.inline) {
       let index = entries.position(n => n.placement == "right" and
         (n.after == c.after or (n.at("comment-page", default: false) and n.after == c.page)))
       if index == none {

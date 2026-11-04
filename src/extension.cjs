@@ -7,13 +7,63 @@ const { PDFDocument } = require('pdf-lib');
 const { NotebookCompiler } = require('./compiler.cjs');
 const { loadBook, planNotebook, exportNotebook } = require('./document.cjs');
 const { assertExportTarget } = require('./paths.cjs');
-const { validAreas, clipSnippet, commentSnippet, pageFingerprint } = require('./references.cjs');
+const {
+  validAreas,
+  clipSnippet,
+  referenceEdits,
+  legacyReferenceEdits,
+  pageFingerprint,
+} = require('./references.cjs');
 const { notebookSource, templateUpgradeEdits } = require('./template.cjs');
 const { TINYMIST_ID, TemplateBridge, resolveEngine } = require('./tinymist.cjs');
 
 function inside(root, file) {
   const rel = path.relative(root, file);
   return rel === '' || (!rel.startsWith('..' + path.sep) && rel !== '..' && !path.isAbsolute(rel));
+}
+function notebookBodyStart(source) {
+  const show = /^[ \t]*#show:[ \t]*(?:[\w-]+\.)*notebook(?:\.with)?\b/m.exec(source);
+  if (!show) return 0;
+  let i = show.index + show[0].length;
+  while (source[i] === ' ' || source[i] === '\t') i++;
+  if (source[i] !== '(') {
+    const end = source.indexOf('\n', i);
+    return end < 0 ? source.length : end + 1;
+  }
+  let depth = 0,
+    string = false,
+    line = false,
+    block = false;
+  for (; i < source.length; i++) {
+    const c = source[i],
+      next = source[i + 1];
+    if (line) {
+      if (c === '\n') line = false;
+      continue;
+    }
+    if (block) {
+      if (c === '*' && next === '/') {
+        block = false;
+        i++;
+      }
+      continue;
+    }
+    if (string) {
+      if (c === '\\') i++;
+      else if (c === '"') string = false;
+      continue;
+    }
+    if (c === '"') string = true;
+    else if (c === '/' && next === '/') {
+      line = true;
+      i++;
+    } else if (c === '/' && next === '*') {
+      block = true;
+      i++;
+    } else if (c === '(') depth++;
+    else if (c === ')' && --depth === 0) return i + 1;
+  }
+  return source.length;
 }
 class NotebookSession {
   constructor(context, root, entry, output, bridge) {
@@ -24,6 +74,82 @@ class NotebookSession {
     this.sourceEvents = [];
     this.positionEvents = [];
     this.disposed = false;
+  }
+  rememberInsertionEditor(editor) {
+    if (!editor) return;
+    const doc = editor.document;
+    this.insertionEditor =
+      doc.uri.scheme === 'file' && doc.languageId === 'typst' && inside(this.root, doc.uri.fsPath)
+        ? editor
+        : undefined;
+  }
+  async containsNoteFile(entry, target) {
+    const key = (file) =>
+      process.platform === 'win32' ? path.resolve(file).toLowerCase() : path.resolve(file);
+    const wanted = key(target),
+      seen = new Set(),
+      pending = [entry.uri.fsPath];
+    while (pending.length && seen.size < 200) {
+      const file = pending.pop(),
+        id = key(file);
+      if (id === wanted) return true;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const open = vscode.workspace.textDocuments.find(
+        (doc) => doc.uri.scheme === 'file' && key(doc.uri.fsPath) === id,
+      );
+      const source = open ? open.getText() : await fs.readFile(file, 'utf8').catch(() => '');
+      let fence = 0,
+        blocked = false;
+      for (const raw of source.split(/\r?\n/)) {
+        const ticks = /^[ \t]*(`{3,})/.exec(raw);
+        if (!blocked && ticks) {
+          if (!fence) fence = ticks[1].length;
+          else if (ticks[1].length >= fence) fence = 0;
+          continue;
+        }
+        if (fence) continue;
+        let line = raw;
+        while (line) {
+          if (blocked) {
+            const end = line.indexOf('*/');
+            if (end < 0) {
+              line = '';
+              break;
+            }
+            blocked = false;
+            line = line.slice(end + 2);
+          } else {
+            const start = line.indexOf('/*');
+            if (start < 0) break;
+            const end = line.indexOf('*/', start + 2);
+            if (end < 0) {
+              line = line.slice(0, start);
+              blocked = true;
+              break;
+            }
+            line = line.slice(0, start) + line.slice(end + 2);
+          }
+        }
+        const match = /^[ \t]*#include[ \t]+"([^"\r\n]+)"/.exec(line);
+        if (!match) continue;
+        const child = match[1].startsWith('/')
+          ? path.join(this.root, match[1])
+          : path.resolve(path.dirname(file), match[1]);
+        if (inside(this.root, child) && path.extname(child).toLowerCase() === '.typ')
+          pending.push(child);
+      }
+    }
+    return false;
+  }
+  async insertionTarget(entry) {
+    const editor = this.insertionEditor;
+    if (!editor || editor.document.isClosed || !vscode.window.visibleTextEditors.includes(editor))
+      throw Error('请先打开笔记，把光标放在要插入注释的位置。');
+    const doc = editor.document;
+    if (!(await this.containsNoteFile(entry, doc.uri.fsPath)))
+      throw Error('光标所在的文件未被当前笔记入口以 #include 引入，请切换到笔记文件。');
+    return { editor, doc, position: editor.selection.active, version: doc.version };
   }
   async startCompiler() {
     const settings = await this.bridge.ensure(this.entry, this.root);
@@ -64,6 +190,10 @@ class NotebookSession {
   }
   async start() {
     this.starting = true;
+    this.rememberInsertionEditor(vscode.window.activeTextEditor);
+    this.disposables.push(
+      vscode.window.onDidChangeActiveTextEditor((editor) => this.rememberInsertionEditor(editor)),
+    );
     this.disposables.push(
       vscode.workspace.onDidChangeTextDocument((e) => {
         if (
@@ -74,6 +204,12 @@ class NotebookSession {
           this.compiler?.update(e.document.uri.fsPath, e.document.getText());
           this.schedule();
         }
+      }),
+    );
+    this.disposables.push(
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration('pdfNotebook.annotationStyle', vscode.Uri.file(this.entry)))
+          this.post({ type: 'annotation-style', style: this.annotationStyle() });
       }),
     );
     this.disposables.push(
@@ -98,6 +234,8 @@ class NotebookSession {
     );
     this.disposables.push(
       vscode.window.onDidChangeTextEditorSelection((e) => {
+        if (e.textEditor === vscode.window.activeTextEditor)
+          this.rememberInsertionEditor(e.textEditor);
         if (
           e.kind === vscode.TextEditorSelectionChangeKind.Command ||
           Date.now() < (this.suppressFollowUntil || 0)
@@ -256,6 +394,25 @@ class NotebookSession {
       canUpgradeTemplate: Boolean(doc && templateUpgradeEdits(doc.getText()).length),
     };
   }
+  annotationStyle() {
+    const style = vscode.workspace
+      .getConfiguration('pdfNotebook', vscode.Uri.file(this.entry))
+      .get('annotationStyle', 'underline');
+    return style === 'highlight' ? 'highlight' : 'underline';
+  }
+  async setAnnotationStyle(style) {
+    if (!['underline', 'highlight'].includes(style)) return;
+    const config = vscode.workspace.getConfiguration('pdfNotebook', vscode.Uri.file(this.entry));
+    const values = config.inspect('annotationStyle');
+    const target =
+      values?.workspaceFolderValue !== undefined
+        ? vscode.ConfigurationTarget.WorkspaceFolder
+        : values?.workspaceValue !== undefined
+          ? vscode.ConfigurationTarget.Workspace
+          : vscode.ConfigurationTarget.Global;
+    await config.update('annotationStyle', style, target);
+    this.post({ type: 'annotation-style', style: this.annotationStyle() });
+  }
   publish() {
     if (!this.panel) return;
     if (!this.snapshot) {
@@ -277,7 +434,8 @@ class NotebookSession {
       title: plan.config.title,
       noteCount: plan.noteCount,
       highlights: plan.highlights,
-      commentTemplate: plan.config.comments === 1,
+      commentTemplate: plan.config.comments >= 3,
+      annotationStyle: this.annotationStyle(),
       revision,
       error: this.lastError ? this.errorMessage(this.lastError) : null,
     });
@@ -336,7 +494,8 @@ class NotebookSession {
           } catch (e) {
             this.post({ type: 'reference-result', request: msg.request, error: e.message });
           }
-        } else if (msg.type === 'export') await this.export();
+        } else if (msg.type === 'set-annotation-style') await this.setAnnotationStyle(msg.style);
+        else if (msg.type === 'export') await this.export();
         else if (msg.type === 'upgrade-template') {
           if (
             await vscode.commands.executeCommand(
@@ -406,39 +565,99 @@ class NotebookSession {
       throw Error('这条注释的位置已更新，请重新打开引用。');
     this.writingComment = true;
     try {
-      const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(this.entry));
+      const entry = await vscode.workspace.openTextDocument(vscode.Uri.file(this.entry));
+      const target = msg.reanchor != null ? undefined : await this.insertionTarget(entry);
+      const doc = target?.doc || entry;
+      const entryVersion = entry.version;
+      const version = doc.version;
+      const source = doc.getText();
+      const offset = target ? doc.offsetAt(target.position) : undefined;
+      if (
+        target &&
+        doc.uri.toString() === entry.uri.toString() &&
+        offset < notebookBodyStart(source)
+      )
+        throw Error('请将光标移到笔记配置之后的正文，再插入注释。');
       const edit = new vscode.WorkspaceEdit();
-      if (!snapshot.plan.config.comments) {
-        const owner = await this.commentTemplateOwner(doc);
+      let effectiveSource = source;
+      let upgrades = [],
+        owner;
+      if ((snapshot.plan.config.comments || 0) < 3) {
+        owner = await this.commentTemplateOwner(entry);
         if (!owner) throw Error('请先在定义 notebook 的文件中执行“升级笔记模板”，再保存这条注释。');
-        const [item] = templateUpgradeEdits(owner.getText());
-        edit.replace(
-          owner.uri,
-          new vscode.Range(owner.positionAt(item.start), owner.positionAt(item.end)),
-          item.text,
-        );
+        upgrades = templateUpgradeEdits(owner.getText());
+        if (
+          target &&
+          owner.uri.toString() === doc.uri.toString() &&
+          upgrades.some((item) => offset > item.start && offset < item.end)
+        )
+          throw Error('请将光标移到笔记正文，再插入注释。');
+        for (const item of upgrades)
+          edit.replace(
+            owner.uri,
+            new vscode.Range(owner.positionAt(item.start), owner.positionAt(item.end)),
+            item.text,
+          );
+        if (owner.uri.toString() === doc.uri.toString())
+          effectiveSource = upgrades
+            .slice()
+            .sort((a, b) => b.start - a.start)
+            .reduce(
+              (text, item) => text.slice(0, item.start) + item.text + text.slice(item.end),
+              source,
+            );
       }
       if (!current()) throw Error('原书已更新，请重新选择原文。');
+      if (snapshot.revision !== this.revision) throw Error('笔记刚刚更新，请重试。');
+      if (
+        entry.version !== entryVersion ||
+        doc.version !== version ||
+        (target && !target.editor.selection.active.isEqual(target.position))
+      )
+        throw Error('笔记或光标位置已变更，请重试。');
       const side = snapshot.plan.blocks.find(
         (n) => n.after === msg.page && n.requestedPlacement === 'right',
       );
       const anchor =
         side && snapshot.metadata.find((n) => n.kind === 'pdf-note' && n.id === side.id)?.after;
-      const snippet = commentSnippet({
-        id: msg.reanchor ?? crypto.randomUUID(),
-        reanchor: msg.reanchor != null,
-        page: msg.page,
-        excerpt: msg.excerpt.trim(),
-        areas: msg.areas,
-        comment: msg.comment,
-        after: anchor,
-        fingerprint: pageFingerprint(book, msg.page),
-      });
-      edit.insert(doc.uri, doc.positionAt(doc.getText().length), snippet);
+      let id = msg.reanchor;
+      if (!id)
+        do {
+          id = crypto.randomBytes(9).toString('base64url');
+        } while (snapshot.plan.highlights.some((mark) => mark.id === id));
+      const edits = referenceEdits(
+        source,
+        {
+          id,
+          reanchor: msg.reanchor != null,
+          page: msg.page,
+          excerpt: msg.excerpt.trim(),
+          areas: msg.areas,
+          comment: msg.comment,
+          after: anchor,
+          fingerprint: pageFingerprint(book, msg.page),
+        },
+        effectiveSource,
+        offset,
+      );
+      for (const item of edits) edit.insert(doc.uri, doc.positionAt(item.start), item.text);
       if (!(await vscode.workspace.applyEdit(edit))) throw Error('笔记已被编辑，请重试。');
+      if (target) {
+        const inserted = edits.find((item) => item.role === 'comment');
+        if (inserted) {
+          let cursor = inserted.start + inserted.caret;
+          for (const item of edits)
+            if (item !== inserted && item.start <= inserted.start) cursor += item.text.length;
+          if (owner?.uri.toString() === doc.uri.toString())
+            for (const item of upgrades)
+              if (item.end <= inserted.start) cursor += item.text.length - (item.end - item.start);
+          const position = doc.positionAt(cursor);
+          target.editor.selection = new vscode.Selection(position, position);
+        }
+      }
       return msg.reanchor
         ? `引用已重新关联至原书第 ${msg.page} 页。`
-        : `注释已加入第 ${msg.page} 页的笔记。保存 Typst 文件即可同步。`;
+        : `已在光标处插入注释。保存 Typst 文件即可同步。`;
     } finally {
       this.writingComment = false;
     }
@@ -548,7 +767,9 @@ class NotebookSession {
     }
     const resolved = path.resolve(target);
     await assertExportTarget(resolved, this.bookPath, this.entry);
-    const bytes = await exportNotebook(this.book, this.snapshot.notes, this.snapshot.plan);
+    const bytes = await exportNotebook(this.book, this.snapshot.notes, this.snapshot.plan, {
+      annotationStyle: this.annotationStyle(),
+    });
     await fs.mkdir(path.dirname(resolved), { recursive: true });
     const temp = resolved + `.${crypto.randomBytes(5).toString('hex')}.tmp`;
     try {
@@ -645,18 +866,24 @@ async function activate(context) {
       throw Error('请先打开要升级的 .typ 笔记入口或模板配置文件。');
     await ensureTemplate(doc.uri);
     if (doc.isClosed) return false;
-    const edits = templateUpgradeEdits(doc.getText());
+    const source = doc.getText();
+    const edits = templateUpgradeEdits(source);
     if (!edits.length) {
       vscode.window.showInformationMessage(
         '当前文件已使用最新内置模板，或没有可升级的旧版内置模板导入。',
       );
       return false;
     }
+    const effective = edits
+      .slice()
+      .sort((a, b) => b.start - a.start)
+      .reduce((text, item) => text.slice(0, item.start) + item.text + text.slice(item.end), source);
+    const migration = legacyReferenceEdits(source, effective);
     const edit = new vscode.WorkspaceEdit();
-    for (const item of edits)
+    for (const item of [...edits, ...migration])
       edit.replace(
         doc.uri,
-        new vscode.Range(doc.positionAt(item.start), doc.positionAt(item.end)),
+        new vscode.Range(doc.positionAt(item.start), doc.positionAt(item.end ?? item.start)),
         item.text,
       );
     if (!(await vscode.workspace.applyEdit(edit))) throw Error('未能更新模板导入。');
@@ -779,6 +1006,56 @@ async function activate(context) {
     await context.workspaceState.update(entryStateKey(folder), path.relative(root, entry));
     return session;
   }
+  async function simplifyReferences() {
+    const doc = vscode.window.activeTextEditor?.document;
+    if (!doc || doc.uri.scheme !== 'file' || path.extname(doc.uri.fsPath).toLowerCase() !== '.typ')
+      throw Error('请先打开需要整理的笔记入口文件。');
+    const session = await getSession();
+    if (session.entry !== doc.uri.fsPath) throw Error('请在笔记入口文件中执行此命令。');
+    if (!session.snapshot || session.snapshot.revision !== session.revision || session.lastError)
+      await session.refresh();
+    let owner,
+      upgrades = [];
+    const source = doc.getText();
+    const version = doc.version;
+    let effective = source;
+    if ((session.snapshot.plan.config.comments || 0) < 3) {
+      owner = await session.commentTemplateOwner(doc);
+      if (!owner) throw Error('请先在定义 notebook 的文件中执行“升级笔记模板”。');
+      upgrades = templateUpgradeEdits(owner.getText());
+      if (owner.uri.toString() === doc.uri.toString())
+        effective = upgrades
+          .slice()
+          .sort((a, b) => b.start - a.start)
+          .reduce(
+            (text, item) => text.slice(0, item.start) + item.text + text.slice(item.end),
+            source,
+          );
+    }
+    if (doc.version !== version) throw Error('笔记正在编辑，请重试。');
+    const migration = legacyReferenceEdits(source, effective);
+    if (!migration.length) {
+      vscode.window.showInformationMessage(
+        '没有可安全简化的旧版自动生成引用；已编辑或重新关联过的引用会保留原样。',
+      );
+      return false;
+    }
+    const edit = new vscode.WorkspaceEdit();
+    for (const item of upgrades)
+      edit.replace(
+        owner.uri,
+        new vscode.Range(owner.positionAt(item.start), owner.positionAt(item.end)),
+        item.text,
+      );
+    for (const item of migration)
+      edit.replace(
+        doc.uri,
+        new vscode.Range(doc.positionAt(item.start), doc.positionAt(item.end ?? item.start)),
+        item.text,
+      );
+    if (!(await vscode.workspace.applyEdit(edit))) throw Error('未能简化引用，请重试。');
+    return true;
+  }
   const action =
     (fn) =>
     async (...args) => {
@@ -821,6 +1098,7 @@ async function activate(context) {
     }),
     vscode.commands.registerCommand('pdfNotebook.newNote', action(initialize)),
     vscode.commands.registerCommand('pdfNotebook.useChengsi', action(useChengsi)),
+    vscode.commands.registerCommand('pdfNotebook.simplifyReferences', action(simplifyReferences)),
     vscode.commands.registerCommand('pdfNotebook.initialize', action(initialize)),
     vscode.commands.registerCommand(
       'pdfNotebook.open',

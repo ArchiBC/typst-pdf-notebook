@@ -2,7 +2,7 @@
   "name": "typst-pdf-notebook",
   "displayName": "Typst PDF Notebook",
   "description": "原书按需阅读、Typst 笔记双向定位，导出时插页。",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "publisher": "ArcBC",
   "icon": "media/icon.png",
   "homepage": "https://github.com/ArchiBC/typst-pdf-notebook#readme",
@@ -47,7 +47,8 @@
     "onCommand:pdfNotebook.initialize",
     "onCommand:pdfNotebook.open",
     "onCommand:pdfNotebook.export",
-    "onCommand:pdfNotebook.forwardSearch"
+    "onCommand:pdfNotebook.forwardSearch",
+    "onCommand:pdfNotebook.simplifyReferences"
   ],
   "capabilities": {
     "untrustedWorkspaces": {
@@ -89,6 +90,11 @@
       {
         "command": "pdfNotebook.forwardSearch",
         "title": "定位当前笔记到预览",
+        "category": "PDF Notebook"
+      },
+      {
+        "command": "pdfNotebook.simplifyReferences",
+        "title": "简化已有引用",
         "category": "PDF Notebook"
       }
     ],
@@ -140,6 +146,20 @@
           "default": true,
           "scope": "resource",
           "description": "移动笔记源码光标时，将整本预览定位到相应段落。"
+        },
+        "pdfNotebook.annotationStyle": {
+          "type": "string",
+          "default": "underline",
+          "scope": "resource",
+          "enum": [
+            "underline",
+            "highlight"
+          ],
+          "enumDescriptions": [
+            "使用红色下划线标记选文。",
+            "使用黄色高亮标记选文。"
+          ],
+          "description": "原书引用的标记样式；同时用于阅读预览和导出 PDF。"
         }
       }
     }

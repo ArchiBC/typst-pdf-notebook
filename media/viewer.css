@@ -186,8 +186,35 @@ aside h2 {
   z-index: 1;
   mix-blend-mode: multiply;
 }
-.source-marks > span {
+.source-marks.highlight > span {
   background: rgb(255 215 42 / 48%);
+}
+.source-marks.underline > span {
+  border-bottom: 0.75px solid #c83740;
+  box-sizing: border-box;
+}
+.source-badges {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+.source-badge {
+  position: absolute;
+  transform: translateY(-80%);
+  pointer-events: auto;
+  border: 0;
+  padding: 0 2px;
+  min-width: 0;
+  color: #b83740;
+  background: transparent;
+  font: 600 9px/1.2 sans-serif;
+  cursor: pointer;
+}
+.source-badge:hover,
+.source-badge:focus-visible {
+  background: #fff4f3;
+  outline: 1px solid #b83740;
 }
 .clip-box {
   border: 1px solid #23798c;

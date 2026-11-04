@@ -26,6 +26,10 @@
         <option value="2">200%</option>
         <option id="custom-zoom" hidden></option></select
       ><button id="zoom-in" aria-label="放大">+</button>
+      <select id="annotation-style" aria-label="引用标记样式" title="所有引用的标记样式">
+        <option value="underline">下划线</option>
+        <option value="highlight">高亮</option>
+      </select>
       <button id="clip-tool" aria-pressed="false" title="拖框复制原书选区的 Typst 引用">框选</button
       ><button id="export">导出 PDF</button>
     </header>
@@ -50,7 +54,7 @@
       </section>
     </main>
     <div id="selection-actions" hidden>
-      <button id="write-comment" type="button">写侧页注释</button>
+      <button id="write-comment" type="button">写注释</button>
     </div>
     <form id="comment-card" role="dialog" aria-label="侧页注释" hidden>
       <strong id="comment-title">侧页注释</strong>

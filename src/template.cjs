@@ -3,7 +3,7 @@ const path = require('node:path');
 const os = require('node:os');
 
 const PACKAGE_NAME = 'typst-pdf-notebook';
-const PACKAGE_VERSION = '0.3.4';
+const PACKAGE_VERSION = '0.3.6';
 const PACKAGE_IMPORT = `@local/${PACKAGE_NAME}:${PACKAGE_VERSION}`;
 
 function packageRoot({ platform = process.platform, env = process.env, home = os.homedir() } = {}) {
@@ -55,7 +55,7 @@ async function installTemplate(extensionRoot, packages = packageRoot()) {
     { target: path.join(packages, 'local', PACKAGE_NAME, PACKAGE_VERSION), files },
     { target: path.join(packages, 'local', PACKAGE_NAME, '0.2.0'), files: legacy },
   ];
-  for (const version of ['0.3.0', '0.3.1', '0.3.2', '0.3.3']) {
+  for (const version of ['0.3.0', '0.3.1', '0.3.2', '0.3.3', '0.3.4', '0.3.5']) {
     const frozen = new Map(files);
     for (const name of ['notebook.typ', 'math.typ', 'typst.toml'])
       frozen.set(

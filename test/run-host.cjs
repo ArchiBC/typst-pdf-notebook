@@ -4,7 +4,7 @@ const os = require('node:os');
 const { runTests } = require('@vscode/test-electron');
 const { createHostFixture } = require('./support/book.cjs');
 const { environment } = require('./support/environment.cjs');
-async function runCase(prepared, startup) {
+async function runCase(prepared, startup, scenario) {
   const project = path.resolve(__dirname, '..'),
     output = path.join(project, 'output');
   if (!prepared.code) throw Error('请先运行 npm run test:prepare。');
@@ -37,7 +37,7 @@ async function runCase(prepared, startup) {
       extensionDevelopmentPath: process.env.NOTEBOOK_EXTENSION_PATH || prepared.extensionPath,
       extensionTestsPath: path.join(
         __dirname,
-        startup ? 'tinymist-host.cjs' : 'extension-host.cjs',
+        scenario || (startup ? 'tinymist-host.cjs' : 'extension-host.cjs'),
       ),
       extensionTestsEnv: {
         NOTEBOOK_TEST_ROOT: root,
@@ -80,8 +80,13 @@ async function runCase(prepared, startup) {
 }
 async function main() {
   const prepared = environment();
+  if (process.env.NOTEBOOK_HOST_SCENARIO === 'caret') {
+    await runCase(prepared, false, 'caret-host.cjs');
+    return;
+  }
   await runCase(prepared, false);
   await runCase(prepared, true);
+  await runCase(prepared, false, 'caret-host.cjs');
 }
 main().catch((error) => {
   console.error(error);

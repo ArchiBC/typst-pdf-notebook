@@ -167,6 +167,33 @@ async function run() {
   assert.equal(migratedSession.snapshot.plan.config.template, 'chengsi');
   assert.equal(migratedSession.snapshot.plan.rows.length, 342);
   migratedSession.dispose();
+  const legacyPath = path.join(root, 'legacy-reference.notes.typ');
+  const legacySource = `#import "@local/typst-pdf-notebook:0.3.4": *
+#show: notebook.with(pdf: "book.pdf", size: (498.9pt,708.66pt))
+#{
+  import "@local/typst-pdf-notebook:0.3.4": source-comment
+  source-comment(1, "Page 1",
+    ((0.1, 0.1, 0.3, 0.12,),),
+    id: "legacy-id", fingerprint: "0123456789abcdef01234567",
+  )[
+    #text("已有注释")
+  ]
+}
+`;
+  fs.writeFileSync(legacyPath, legacySource);
+  const legacyDoc = await vscode.workspace.openTextDocument(legacyPath);
+  await vscode.window.showTextDocument(legacyDoc, { viewColumn: vscode.ViewColumn.One });
+  assert.equal(await vscode.commands.executeCommand('pdfNotebook.useChengsi'), true);
+  assert.ok(legacyDoc.getText().includes('#pdf-comment(1, "legacy-id")['));
+  assert.ok(legacyDoc.getText().includes('已有注释'));
+  assert.ok(legacyDoc.getText().includes('pdf-notebook-anchors:start'));
+  assert.equal(fs.readFileSync(legacyPath, 'utf8'), legacySource);
+  await vscode.commands.executeCommand('undo');
+  await wait(() => legacyDoc.getText() === legacySource, 'undo legacy reference migration');
+  assert.equal(await vscode.commands.executeCommand('pdfNotebook.simplifyReferences'), true);
+  assert.ok(legacyDoc.getText().includes('#pdf-comment(1, "legacy-id")['));
+  assert.ok(legacyDoc.getText().includes(':0.3.6'));
+  (await api.getSession()).dispose();
   // An old template interprets `right` as a standalone note body. The following
   // text then fails before the first snapshot; the preview must remain usable.
   const incompatiblePath = path.join(root, '旧版便签.notes.typ');
@@ -197,14 +224,29 @@ async function run() {
     await vscode.commands.executeCommand('pdfNotebook.useChengsi', incompatibleDoc.uri),
     true,
   );
-  await wait(
-    () =>
-      !failedSession.lastError &&
-      failedSession.viewerDiagnostics?.bookPages === 341 &&
-      failedSession.viewerDiagnostics.canvases > 0 &&
-      !failedSession.viewerDiagnostics.error,
-    'upgraded cold preview recovers without recreating the session',
-  );
+  failedSession.panel.reveal(vscode.ViewColumn.Beside, true);
+  try {
+    await wait(
+      () =>
+        !failedSession.lastError &&
+        failedSession.viewerDiagnostics?.bookPages === 341 &&
+        failedSession.viewerDiagnostics.canvases > 0 &&
+        !failedSession.viewerDiagnostics.error,
+      'upgraded cold preview recovers without recreating the session',
+    );
+  } catch (error) {
+    console.error(
+      'COLD PREVIEW DIAGNOSTICS',
+      JSON.stringify({
+        error: failedSession.lastError?.message,
+        viewerError: failedSession.viewerError,
+        diagnostics: failedSession.viewerDiagnostics,
+        revision: failedSession.revision,
+        snapshotRevision: failedSession.snapshot?.revision,
+      }),
+    );
+    throw error;
+  }
   assert.equal(failedSession.compiler, failedCompiler);
   assert.ok(failedSession.snapshot.plan.rows.some((row) => row.kind === 'side' && row.page === 15));
   assert.ok(incompatibleDoc.getText().endsWith('UNSAVED COMPATIBILITY BODY'));
@@ -272,10 +314,124 @@ async function run() {
       editorUnsavedContentSurvivesRestart: true,
     },
   };
-  const editor = await vscode.window.showTextDocument(main, { viewColumn: vscode.ViewColumn.One });
+  let editor = await vscode.window.showTextDocument(main, { viewColumn: vscode.ViewColumn.One });
   assert.deepEqual(session.compiler.fontPaths, JSON.parse(process.env.NOTEBOOK_TEST_FONT_PATHS));
   assert.equal(session.compiler.packagePath, process.env.TYPST_PACKAGE_PATH);
   const originalMain = main.getText();
+  // A wrapped 0.3.4 notebook upgrades and receives compact comments in one edit.
+  const templateDoc = await vscode.workspace.openTextDocument(path.join(root, 'template.typ'));
+  const templateCurrent = templateDoc.getText();
+  await replace(templateDoc, templateCurrent.replace(':0.3.6', ':0.3.4'));
+  await wait(() => session.snapshot.plan.config.comments === 1, 'legacy comments template active');
+  const referenceMessage = {
+    type: 'save-comment',
+    page: 1,
+    areas: [[0.1, 0.1, 0.3, 0.12]],
+    excerpt: 'Page 1',
+    comment: '自己的注释 # [内容]',
+    bookVersion: session.bookVersion,
+    bookUrl: session.panel.webview.asWebviewUri(vscode.Uri.file(session.bookPath)).toString(),
+  };
+  const targetLine = main.lineAt(10);
+  editor.selection = new vscode.Selection(targetLine.range.end, targetLine.range.end);
+  await session.writeReference(referenceMessage);
+  await wait(
+    () => session.snapshot.plan.highlights.length === 1 && !session.lastError,
+    'compact comment compiles',
+  );
+  assert.match(main.getText(), /#pdf-comment\(1, "[\w-]+"\)(?!\[)/);
+  assert.ok(main.getText().includes('自己的注释 \\# \\[内容\\]'));
+  assert.ok(
+    main.getText().indexOf('#pdf-comment(1,') >
+      main.getText().indexOf('Thoughts about linear maps.'),
+  );
+  assert.ok(
+    main.getText().indexOf('#pdf-comment(1,') < main.getText().indexOf('INLINE SOURCE TARGET.'),
+  );
+  assert.ok(main.offsetAt(editor.selection.active) > main.getText().indexOf('自己的注释'));
+  assert.ok(main.getText().includes('pdf-notebook-anchors:start'));
+  const startLine = main.positionAt(main.getText().indexOf('pdf-notebook-anchors:start')).line;
+  const endLine = main.positionAt(main.getText().indexOf('pdf-notebook-anchors:end')).line;
+  await wait(async () => {
+    const ranges = await vscode.commands.executeCommand(
+      'vscode.executeFoldingRangeProvider',
+      main.uri,
+    );
+    return ranges?.some((range) => range.start < startLine && range.end >= endLine);
+  }, 'generated anchor block is foldable');
+  assert.ok(templateDoc.getText().includes(':0.3.6'));
+  assert.equal(session.snapshot.plan.highlights[0].number, 1);
+  assert.equal(fs.readFileSync(path.join(root, 'main.typ'), 'utf8'), originalMain);
+  assert.equal(session.annotationStyle(), 'underline');
+  await session.setAnnotationStyle('highlight');
+  assert.equal(session.annotationStyle(), 'highlight');
+  await session.setAnnotationStyle('underline');
+  assert.equal(session.annotationStyle(), 'underline');
+  await vscode.workspace
+    .getConfiguration('pdfNotebook', main.uri)
+    .update('annotationStyle', undefined, vscode.ConfigurationTarget.Global);
+  const includedDoc = await vscode.workspace.openTextDocument(
+    path.join(root, 'notes/answers-1a.typ'),
+  );
+  const originalIncluded = includedDoc.getText();
+  const includedEditor = await vscode.window.showTextDocument(includedDoc, {
+    viewColumn: vscode.ViewColumn.One,
+  });
+  const includedOffset = originalIncluded.indexOf('A linear map');
+  const includedPosition = includedDoc.positionAt(includedOffset);
+  includedEditor.selection = new vscode.Selection(includedPosition, includedPosition);
+  await wait(
+    () => session.insertionEditor?.document === includedDoc,
+    'included editor becomes insertion target',
+  );
+  await session.writeReference({ ...referenceMessage, page: 2, comment: 'INCLUDED COMMENT' });
+  await wait(
+    () => session.snapshot.plan.highlights.length === 2 && !session.lastError,
+    'included reference compiles',
+  );
+  const includedTextAfter = includedDoc.getText();
+  assert.ok(
+    includedTextAfter.indexOf('#pdf-comment(2,') > includedTextAfter.indexOf('INCLUDED ANSWER.'),
+  );
+  assert.ok(
+    includedTextAfter.indexOf('#pdf-comment(2,') < includedTextAfter.indexOf('A linear map'),
+  );
+  assert.ok(includedTextAfter.includes('INCLUDED COMMENT'));
+  assert.equal(fs.readFileSync(includedDoc.uri.fsPath, 'utf8'), originalIncluded);
+  const includedMark = session.snapshot.plan.highlights.find((mark) => mark.page === 2);
+  const includedBlock = session.snapshot.plan.blocks.find(
+    (block) => includedMark.notePage >= block.first && includedMark.notePage <= block.last,
+  );
+  assert.equal(
+    includedBlock.after,
+    23,
+    'the reference stays in the note where the cursor was placed',
+  );
+  await vscode.commands.executeCommand('undo');
+  await wait(() => includedDoc.getText() === originalIncluded, 'undo included-file insertion');
+  const unrelatedPath = path.join(root, 'unrelated.typ');
+  fs.writeFileSync(unrelatedPath, 'UNRELATED');
+  const unrelated = await vscode.workspace.openTextDocument(unrelatedPath);
+  await vscode.window.showTextDocument(unrelated, { viewColumn: vscode.ViewColumn.One });
+  await wait(
+    () => session.insertionEditor?.document === unrelated,
+    'unrelated editor becomes active',
+  );
+  await assert.rejects(() => session.writeReference(referenceMessage), /未被当前笔记入口/);
+  assert.equal(unrelated.getText(), 'UNRELATED');
+  editor = await vscode.window.showTextDocument(main, { viewColumn: vscode.ViewColumn.One });
+  await replace(main, originalMain);
+  await replace(templateDoc, templateCurrent);
+  await wait(
+    () => session.snapshot.plan.highlights.length === 0 && !session.lastError,
+    'compact comment fixture restored',
+  );
+  evidence.comments = {
+    compact: true,
+    upgradedWrapper: true,
+    preservesUnsaved: true,
+    styleSwitch: true,
+  };
   const previousCompiler = session.compiler;
   const engineFolder = path.join(root, '自定义引擎');
   fs.mkdirSync(engineFolder);

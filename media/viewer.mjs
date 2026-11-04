@@ -733,6 +733,7 @@ window.addEventListener('message', (e) => {
   const m = e.data;
   if (m.type === 'document') update(m).catch((e) => status(e.message, true));
   else if (m.type === 'reference-result') references.result(m);
+  else if (m.type === 'annotation-style') references.style(m.style);
   else if (m.type === 'position') position(m);
   else if (m.type === 'status') status(m.text);
   else if (m.type === 'error') showError(m);

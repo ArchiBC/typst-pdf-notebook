@@ -17,7 +17,13 @@ const { NotebookCompiler } = require('../src/compiler.cjs');
 const { assertExportTarget } = require('../src/paths.cjs');
 const { installTemplate, PACKAGE_IMPORT, notebookSource } = require('../src/template.cjs');
 const { nativeOptions } = require('./support/environment.cjs');
-const { pageFingerprint, commentSnippet, clipSnippet } = require('../src/references.cjs');
+const {
+  pageFingerprint,
+  commentSnippet,
+  clipSnippet,
+  referenceEdits,
+  legacyReferenceEdits,
+} = require('../src/references.cjs');
 
 async function fixture(t) {
   const parent = path.resolve(__dirname, '../output/test-runs');
@@ -594,10 +600,26 @@ test('a Typst comment survives an unsynced PDF highlight and a changed edition k
   assert.equal(r.plan.rows[0].kind, 'side');
   assert.equal(r.plan.noteCount, 1, 'append to the existing bookmark-anchored note');
   assert.equal(r.plan.highlights[0].stale, false, 'file with no PDF annotation still resolves');
+  assert.equal(r.plan.highlights[0].number, 1);
+  const defaultOutput = await PDFDocument.load(await exportNotebook(clean, r.notes, r.plan));
+  const underline = defaultOutput
+    .getPage(0)
+    .node.lookup(PDFName.of('Annots'), PDFArray)
+    .asArray()
+    .map((ref) => defaultOutput.context.lookup(ref))
+    .find((item) => item.get(PDFName.of('Subtype'))?.toString() === '/Underline');
+  assert.ok(underline, 'the default exported mark is an underline');
+  assert.deepEqual(
+    underline
+      .lookup(PDFName.of('C'), PDFArray)
+      .asArray()
+      .map((n) => n.asNumber()),
+    [0.78, 0.22, 0.25],
+  );
   const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
   for (const book of [clean, marked]) {
     const plan = planNotebook(book, r.notes, r.metadata);
-    const merged = await exportNotebook(book, r.notes, plan);
+    const merged = await exportNotebook(book, r.notes, plan, { annotationStyle: 'highlight' });
     const pdf = await getDocument({ data: new Uint8Array(merged), verbosity: 0 }).promise;
     try {
       const p = await pdf.getPage(1),
@@ -622,6 +644,28 @@ test('a Typst comment survives an unsynced PDF highlight and a changed edition k
         .replace(/\s/g, '');
       assert.match(text, /USERSIDEBODY/);
       assert.match(text, /Myanswer#\[literal\]/);
+      // Text extraction ignores clipping. Render the side column to catch a
+      // badge being inserted into a still-clipped original content stream.
+      let canvasLibrary;
+      try {
+        canvasLibrary = require('@napi-rs/canvas');
+      } catch {
+        /* optional PDF.js renderer */
+      }
+      if (canvasLibrary) {
+        const viewport = p.getViewport({ scale: 1 });
+        const canvas = canvasLibrary.createCanvas(
+          Math.ceil(viewport.width),
+          Math.ceil(viewport.height),
+        );
+        const context = canvas.getContext('2d');
+        await p.render({ canvas, canvasContext: context, viewport }).promise;
+        const pixels = context.getImageData(310, 0, Math.floor(viewport.width) - 310, 100).data;
+        let ink = 0;
+        for (let i = 0; i < pixels.length; i += 4)
+          if (pixels[i] < 180 && pixels[i + 1] < 180 && pixels[i + 2] < 180) ink++;
+        assert.ok(ink > 15, 'the side note remains visibly rendered with badges');
+      } else t.diagnostic('Canvas renderer unavailable; side-column raster check not run.');
     } finally {
       await pdf.loadingTask.destroy();
     }
@@ -681,6 +725,270 @@ test('a Typst comment survives an unsynced PDF highlight and a changed edition k
     await repairedPdf.loadingTask.destroy();
   }
   assert.deepEqual(fs.readFileSync(path.join(f.root, 'book.pdf')), Buffer.from(clean.bytes));
+});
+
+test('compact comments keep anchors in the same file and use paired per-page numbers', async (t) => {
+  const f = await fixture(t);
+  let entry = `#import "${PACKAGE_IMPORT}": *\r\n#show: notebook.with(pdf:"book.pdf",size:(300pt,450pt))\r\n#sidenote("Chapter")\r\nORIGINAL SIDE BODY\r\n`;
+  const signature = pageFingerprint(f.book, 1);
+  const common = {
+    page: 1,
+    after: 'Chapter',
+    fingerprint: signature,
+    areas: [[0.1, 0.1, 0.4, 0.14]],
+  };
+  const apply = (source, data) =>
+    referenceEdits(source, data)
+      .sort((a, b) => b.start - a.start)
+      .reduce(
+        (result, edit) => result.slice(0, edit.start) + edit.text + result.slice(edit.start),
+        source,
+      );
+  entry = apply(entry, {
+    ...common,
+    id: 'first',
+    excerpt: 'SOURCE ONE',
+    comment: '解答 # [literal] *bold*',
+  });
+  entry = apply(entry, { ...common, id: 'second', excerpt: 'ANOTHER QUOTE', comment: '第二条' });
+  entry = apply(entry, {
+    ...common,
+    id: 'third',
+    page: 2,
+    after: undefined,
+    fingerprint: pageFingerprint(f.book, 2),
+    excerpt: 'SOURCE TWO',
+    comment: '另页注释',
+  });
+  assert.equal((entry.match(/pdf-notebook-anchors:start/g) || []).length, 1);
+  assert.equal((entry.match(/pdf-notebook-anchors:end/g) || []).length, 1);
+  assert.ok(!entry.replace(/\r\n/g, '').includes('\n'), 'preserve CRLF');
+  const bodies = entry.slice(0, entry.indexOf('pdf-notebook-anchors:start'));
+  assert.match(bodies, /#pdf-comment\(1, "first"\)(?!\[)/);
+  assert.ok(bodies.includes('解答 \\# \\[literal\\] \\*bold\\*'));
+  assert.doesNotMatch(bodies, /SOURCE ONE|ANOTHER QUOTE|fingerprint|pdf-anchor/);
+  f.compiler.update(f.entry, entry);
+  const result = await compile(f);
+  assert.deepEqual(
+    result.plan.highlights.map((m) => [m.id, m.page, m.number]),
+    [
+      ['first', 1, 1],
+      ['second', 1, 2],
+      ['third', 2, 1],
+    ],
+  );
+  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const pdf = await getDocument({ data: new Uint8Array(result.bytes), verbosity: 0 }).promise;
+  try {
+    let text = '';
+    for (let page = 1; page <= pdf.numPages; page++)
+      text += (await (await pdf.getPage(page)).getTextContent()).items
+        .map((item) => item.str)
+        .join('');
+    text = text.replace(/\s/g, '');
+    assert.match(text, /ORIGINALSIDEBODY/);
+    assert.match(text, /解答#\[literal\]\*bold\*/);
+    assert.doesNotMatch(text, /SOURCEONE|ANOTHERQUOTE|SOURCETWO/);
+  } finally {
+    await pdf.loadingTask.destroy();
+  }
+  const restored = planNotebook(await loadBook(f.book.bytes), result.notes, result.metadata);
+  assert.ok(restored.highlights.every((mark) => !mark.stale));
+  assert.throws(
+    () =>
+      referenceEdits(entry.replace('pdf-notebook-anchors:end', 'broken'), {
+        ...common,
+        id: 'fourth',
+        excerpt: 'x',
+        comment: 'y',
+      }),
+    /定位数据不完整/,
+  );
+});
+
+test('unbracketed reference uses the insertion point without moving surrounding note text', async (t) => {
+  const f = await fixture(t);
+  const header = `#import "${PACKAGE_IMPORT}": *\n#show: notebook.with(pdf:"book.pdf",size:(300pt,450pt))\n`;
+  const variants = [
+    {
+      label: 'ordinary note',
+      source: '#note(2)\nBEFORE\n\nAFTER\n\n#note(3)\nOTHER\n',
+      at: 'AFTER',
+      attached: 2,
+    },
+    {
+      label: 'bracketed note',
+      source: '#note(2)[\nBEFORE\n\nAFTER\n]\n\n#note(3)\nOTHER\n',
+      at: 'AFTER',
+      attached: 2,
+    },
+    { label: 'standalone', source: '#note(3)\nOTHER\n', at: '#note(3)', attached: 1 },
+  ];
+  const data = {
+    id: 'cursor',
+    page: 1,
+    excerpt: 'SOURCE ONE',
+    comment: 'INSERTED',
+    areas: [[0.1, 0.08, 0.4, 0.13]],
+    fingerprint: pageFingerprint(f.book, 1),
+  };
+  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  for (const variant of variants) {
+    const original = header + variant.source;
+    const offset = original.indexOf(variant.at);
+    const edits = referenceEdits(original, data, original, offset);
+    const source = edits
+      .slice()
+      .sort((a, b) => b.start - a.start)
+      .reduce(
+        (value, edit) => value.slice(0, edit.start) + edit.text + value.slice(edit.start),
+        original,
+      );
+    assert.ok(
+      source.indexOf('#pdf-comment(1, "cursor")') < source.indexOf(variant.at),
+      variant.label,
+    );
+    assert.doesNotMatch(source, /#pdf-comment\(1, "cursor"\)\[/);
+    f.compiler.update(f.entry, source);
+    const result = await compile(f);
+    const mark = result.plan.highlights[0];
+    const block = result.plan.blocks.find(
+      (note) => mark.notePage >= note.first && mark.notePage <= note.last,
+    );
+    assert.equal(block.after, variant.attached, variant.label);
+    const pdf = await getDocument({ data: new Uint8Array(result.bytes), verbosity: 0 }).promise;
+    try {
+      const page = await pdf.getPage(mark.notePage);
+      const items = (await page.getTextContent()).items;
+      const text = items
+        .map((item) => item.str)
+        .join('')
+        .replace(/\s/g, '');
+      assert.match(text, /INSERTED/, variant.label);
+      const body = items.find((item) => item.str.includes('INSERTED'));
+      assert.ok(
+        items.some(
+          (item) =>
+            item.str.trim() === '1' &&
+            Math.abs(item.transform[5] - body.transform[5]) < 10 &&
+            item.transform[4] <= body.transform[4],
+        ),
+        variant.label + ' marker is next to its text',
+      );
+      if (variant.attached === 2) {
+        assert.ok(text.indexOf('BEFORE') < text.indexOf('INSERTED'), variant.label);
+        assert.ok(text.indexOf('INSERTED') < text.indexOf('AFTER'), variant.label);
+      }
+    } finally {
+      await pdf.loadingTask.destroy();
+    }
+  }
+});
+
+test('an included note file keeps its reference inside a bracketed note', async (t) => {
+  const f = await fixture(t);
+  const text = '#import "@local/typst-pdf-notebook:0.3.5": *\nINCLUDED BEFORE\n\nINCLUDED AFTER\n';
+  const insertion = text.indexOf('INCLUDED AFTER');
+  const data = {
+    id: 'included',
+    page: 1,
+    excerpt: 'SOURCE ONE',
+    comment: 'INCLUDED COMMENT',
+    areas: [[0.1, 0.08, 0.4, 0.13]],
+    fingerprint: pageFingerprint(f.book, 1),
+  };
+  const edits = referenceEdits(text, data, text, insertion);
+  const included = edits
+    .slice()
+    .sort((a, b) => b.start - a.start)
+    .reduce(
+      (source, item) => source.slice(0, item.start) + item.text + source.slice(item.start),
+      text,
+    );
+  assert.ok(
+    included.indexOf('@local/typst-pdf-notebook:0.3.6') >
+      included.indexOf('@local/typst-pdf-notebook:0.3.5'),
+  );
+  f.compiler.update(f.answer, included);
+  f.compiler.update(
+    f.entry,
+    `#import "${PACKAGE_IMPORT}": *\n#show: notebook.with(pdf:"book.pdf",size:(300pt,450pt))\n#note(2)[\n#include "answer.typ"\n]\n`,
+  );
+  const result = await compile(f);
+  assert.equal(result.plan.highlights.length, 1);
+  assert.equal(result.plan.blocks[0].after, 2);
+  assert.equal(result.plan.highlights[0].notePage, result.plan.blocks[0].first);
+});
+
+test('comments created by the 0.3.4 template remain valid after upgrading', async (t) => {
+  const f = await fixture(t);
+  const source = `#import "${PACKAGE_IMPORT}": *
+#show: notebook.with(pdf:"book.pdf",size:(300pt,450pt))
+#{
+  import "@local/typst-pdf-notebook:0.3.4": source-comment
+  source-comment(1, "SOURCE ONE", ((0.1, 0.1, 0.4, 0.14),), id: "legacy", fingerprint: "${pageFingerprint(f.book, 1)}")[原有注释]
+}
+`;
+  f.compiler.update(f.entry, source);
+  const result = await compile(f);
+  assert.equal(result.plan.highlights[0].id, 'legacy');
+  assert.equal(result.plan.highlights[0].number, 1);
+  assert.equal(result.plan.highlights[0].stale, false);
+});
+
+test('legacy conversion preserves content, ignores code examples, and compiles equivalent anchors', async (t) => {
+  const f = await fixture(t);
+  const oldBlock = `#{
+  import "@local/typst-pdf-notebook:0.3.4": source-comment
+  source-comment(1, "SOURCE ONE",
+    ((0.1, 0.1, 0.4, 0.14,),),
+    id: "b69d4bd8-e32e-444f-a081-8281922cb86d", fingerprint: "${pageFingerprint(f.book, 1)}",
+  )[
+    #text("旧注释 # [原样]")
+  ]
+}`;
+  const source =
+    `#import "${PACKAGE_IMPORT}": *\n#show: notebook.with(pdf:"book.pdf",size:(300pt,450pt))\n\n${oldBlock}\n\n#note(2)\n正文\n\n` +
+    '```typ\n' +
+    oldBlock +
+    '\n```\n';
+  const changes = legacyReferenceEdits(source);
+  const migrated = changes
+    .sort((a, b) => b.start - a.start)
+    .reduce(
+      (text, item) => text.slice(0, item.start) + item.text + text.slice(item.end ?? item.start),
+      source,
+    );
+  assert.match(migrated, /#pdf-comment\(1, "b69d4bd8-e32e-444f-a081-8281922cb86d"\)\[/);
+  assert.ok(migrated.includes('旧注释 \\# \\[原样\\]'));
+  assert.equal((migrated.match(/pdf-notebook-anchors:start/g) || []).length, 1);
+  assert.ok(migrated.includes('```typ\n' + oldBlock + '\n```'), 'examples remain untouched');
+  f.compiler.update(f.entry, source);
+  const before = await compile(f);
+  f.compiler.update(f.entry, migrated);
+  const after = await compile(f);
+  assert.deepEqual(
+    after.plan.highlights.map(({ id, page, areas, fingerprint, stale }) => ({
+      id,
+      page,
+      areas,
+      fingerprint,
+      stale,
+    })),
+    before.plan.highlights.map(({ id, page, areas, fingerprint, stale }) => ({
+      id,
+      page,
+      areas,
+      fingerprint,
+      stale,
+    })),
+  );
+  assert.equal(after.plan.highlights[0].stale, false);
+  assert.deepEqual(
+    legacyReferenceEdits(source + '\n// : source-anchor'),
+    [],
+    'rebound legacy references stay untouched',
+  );
 });
 
 test('changing PDF literal strings to hexadecimal leaves the page anchor intact', async () => {

@@ -107,6 +107,16 @@ test('bundled package installs idempotently and refuses to overwrite user change
       await fs.readFile(path.join(installed.legacyTargets[4], name)),
       await fs.readFile(path.join(extension, 'templates/legacy/0.3.3', name)),
     );
+  for (const name of ['notebook.typ', 'math.typ', 'typst.toml'])
+    assert.deepEqual(
+      await fs.readFile(path.join(installed.legacyTargets[5], name)),
+      await fs.readFile(path.join(extension, 'templates/legacy/0.3.4', name)),
+    );
+  for (const name of ['notebook.typ', 'math.typ', 'typst.toml'])
+    assert.deepEqual(
+      await fs.readFile(path.join(installed.legacyTargets[6], name)),
+      await fs.readFile(path.join(extension, 'templates/legacy/0.3.5', name)),
+    );
   const source = path.join(installed.target, 'notebook.typ');
   const mtime = (await fs.stat(source)).mtimeMs;
   assert.equal((await installTemplate(extension, packages)).changed, false);

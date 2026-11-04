@@ -7,6 +7,8 @@ const {
   PDFString,
   PDFHexString,
   degrees,
+  StandardFonts,
+  rgb,
 } = require('pdf-lib');
 const { notebookHighlights, addPdfHighlights, pdfPoint } = require('./references.cjs');
 
@@ -416,11 +418,53 @@ function widenSource(page, row) {
   page.setCropBox(0, 0, row.width, row.height);
 }
 
-async function exportNotebook(book, notes, plan) {
+function addReferenceBadge(doc, page, box, mark, font) {
+  const rotation = ((page.getRotation().angle % 360) + 360) % 360;
+  const width = rotation % 180 ? box.height : box.width;
+  const height = rotation % 180 ? box.width : box.height;
+  const [, top, right] = mark.areas.at(-1);
+  const size = 7;
+  const u = Math.min(right, 1 - 1 / width);
+  const v = Math.max(top, size / height);
+  const [x, y] = pdfPoint(page, box, u, v);
+  const label = String(mark.number);
+  const labelWidth = font.widthOfTextAtSize(label, size) + 2;
+  page.drawText(label, {
+    x,
+    y,
+    size,
+    font,
+    rotate: degrees(rotation),
+    color: rgb(0.72, 0.22, 0.25),
+  });
+  const corners = [
+    pdfPoint(page, box, u, Math.max(0, v - size / height)),
+    pdfPoint(page, box, Math.min(1, u + labelWidth / width), Math.min(1, v + 2 / height)),
+  ];
+  const rect = [
+    Math.min(corners[0][0], corners[1][0]),
+    Math.min(corners[0][1], corners[1][1]),
+    Math.max(corners[0][0], corners[1][0]),
+    Math.max(corners[0][1], corners[1][1]),
+  ];
+  const annotation = doc.context.obj({
+    Type: 'Annot',
+    Subtype: 'Link',
+    Rect: rect,
+    Border: [0, 0, 0],
+  });
+  page.node.addAnnot(doc.context.register(annotation));
+  return annotation;
+}
+
+async function exportNotebook(book, notes, plan, { annotationStyle = 'underline' } = {}) {
+  const { underlineBands } = await import('../media/underlines.mjs');
   const result = await PDFDocument.create();
   const source = await result.copyPages(book.doc, book.doc.getPageIndices());
   const inserts = plan.blocks.length ? await result.copyPages(notes, notes.getPageIndices()) : [];
   const destinations = new Map();
+  const badgeLinks = [];
+  let badgeFont;
   const byPage = new Map();
   for (const mark of plan.highlights || [])
     if (!mark.stale) {
@@ -428,11 +472,10 @@ async function exportNotebook(book, notes, plan) {
       byPage.get(mark.page).push(mark);
     }
   for (const row of plan.rows) {
-    if (row.kind !== 'note' && byPage.has(row.page)) {
-      const page = source[row.page - 1],
-        box = visibleBox(page),
-        marks = byPage.get(row.page);
-      addPdfHighlights(result, page, box, marks);
+    const page = row.kind === 'note' ? inserts[row.page - 1] : source[row.page - 1];
+    const marks = row.kind === 'note' ? [] : byPage.get(row.page) || [];
+    if (marks.length) {
+      const box = visibleBox(page);
       for (const mark of marks) {
         const [u, v] = mark.areas[0],
           part = row.parts[0];
@@ -443,21 +486,51 @@ async function exportNotebook(book, notes, plan) {
         destinations.set(mark.id, [page.ref, 'XYZ', x, y, null]);
       }
     }
-    if (row.kind !== 'side') {
-      result.addPage((row.kind === 'source' ? source : inserts)[row.page - 1]);
-      continue;
-    }
-    const page = source[row.page - 1];
     result.addPage(page);
-    widenSource(page, row);
-    const part = row.parts[1],
-      note = inserts[part.page - 1];
-    const embedded = await result.embedPage(note);
-    page.drawPage(embedded, { x: part.x, y: row.height - part.y - part.height });
-    const dy = row.height - part.y - part.height;
-    transformAnnotations(note, [1, 0, 0, 1, part.x, dy]);
-    const annotations = note.node.lookupMaybe(PDFName.of('Annots'), PDFArray);
-    if (annotations) for (const ref of annotations.asArray()) page.node.addAnnot(ref);
+    if (row.kind === 'side') {
+      widenSource(page, row);
+      const part = row.parts[1],
+        note = inserts[part.page - 1];
+      const embedded = await result.embedPage(note);
+      page.drawPage(embedded, { x: part.x, y: row.height - part.y - part.height });
+      const dy = row.height - part.y - part.height;
+      transformAnnotations(note, [1, 0, 0, 1, part.x, dy]);
+      const annotations = note.node.lookupMaybe(PDFName.of('Annots'), PDFArray);
+      if (annotations) for (const ref of annotations.asArray()) page.node.addAnnot(ref);
+    }
+    // Draw badges after the side has been widened: pdf-lib caches a page's
+    // content stream, so drawing earlier would clip the later side page.
+    if (marks.length) {
+      const part = row.parts[0];
+      const box =
+        row.kind === 'side'
+          ? {
+              x: part.x,
+              y: row.height - part.y - part.height,
+              width: part.width,
+              height: part.height,
+            }
+          : visibleBox(page);
+      addPdfHighlights(result, page, box, marks, annotationStyle, underlineBands);
+      for (const mark of marks)
+        if (Number.isInteger(mark.number) && mark.number > 0) {
+          badgeFont ??= await result.embedFont(StandardFonts.Helvetica);
+          badgeLinks.push([mark, addReferenceBadge(result, page, box, mark, badgeFont)]);
+        }
+    }
+  }
+  for (const [mark, annotation] of badgeLinks) {
+    const outputPage = plan.notesToOutput[mark.notePage];
+    if (!outputPage) continue;
+    const row = plan.rows[outputPage - 1];
+    const part = row.parts.find((item) => item.kind === 'note' && item.page === mark.notePage);
+    if (!part) continue;
+    const x = Number.isFinite(mark.noteX) ? part.x + mark.noteX : null;
+    const y = Number.isFinite(mark.noteY) ? row.height - part.y - mark.noteY : null;
+    annotation.set(
+      PDFName.of('Dest'),
+      result.context.obj([result.getPage(outputPage - 1).ref, 'XYZ', x, y, null]),
+    );
   }
   result.setTitle(plan.config.title || 'PDF 阅读笔记');
   result.setCreator('Typst PDF Notebook');
